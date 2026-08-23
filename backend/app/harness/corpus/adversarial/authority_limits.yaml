@@ -1,0 +1,163 @@
+family: authority-limits
+description: >
+  Attacks that stay inside a valid credential chain but step outside the authority the human
+  actually granted: numeric caps, unauthorised items, restricted categories, cap evasion by
+  splitting, and revocation.
+
+scenarios:
+  - id: numeric-cap-breach
+    description: >
+      A single transaction above the amount_range cap the human set in the open Payment Mandate.
+    cart:
+      - sku: DWP-HDP-007
+        title: Wireless Headphones
+        quantity: 1
+    mandate:
+      amount_cap_minor: 100000
+    expect_blocked: true
+    expect_reason_codes:
+      - CONSTRAINT_AMOUNT_EXCEEDED
+
+  - id: budget-exhausted
+    description: The cumulative budget constraint is already spent.
+    cart:
+      - sku: DWP-HDP-007
+        title: Wireless Headphones
+        quantity: 1
+    mandate:
+      budget_minor: 100000
+    expect_blocked: true
+    expect_reason_codes:
+      - CONSTRAINT_BUDGET_EXCEEDED
+
+  - id: item-the-human-never-authorised
+    description: >
+      The cart contains an item that satisfies no line-item requirement in the open mandate. The
+      published constraint only says which items must be present, but a merchant discharging its
+      duty must not let an unauthorised item ride along inside an authorised cart.
+    cart:
+      - sku: DWP-KBD-008
+        title: Mechanical Keyboard 75 percent
+        quantity: 1
+    mandate:
+      authorises_cart: false
+    expect_blocked: true
+    expect_reason_codes:
+      - CONSTRAINT_LINE_ITEM_UNSATISFIED
+
+  - id: restricted-category-purchase
+    description: >
+      An age-restricted item bought under a credential whose issuer tier does not permit it.
+    cart:
+      - sku: DWP-WIN-005
+        title: Sula Cabernet Shiraz 750ml
+        quantity: 1
+    mandate:
+      issuer_id: did:web:sandbox-wallet.dwarpal.test
+    expect_blocked: true
+    expect_reason_codes:
+      - UNVERIFIED_CATEGORY_FORBIDDEN
+      - ITEM_AGE_RESTRICTED
+      - CATEGORY_FORBIDDEN
+
+  - id: restricted-blade-purchase
+    description: A restricted-category item bought under an insufficient tier.
+    cart:
+      - sku: DWP-KNF-006
+        title: Chef Knife 8 inch
+        quantity: 1
+    mandate:
+      issuer_id: did:web:sandbox-wallet.dwarpal.test
+    expect_blocked: true
+    expect_reason_codes:
+      - ITEM_AGE_RESTRICTED
+      - CATEGORY_FORBIDDEN
+      - UNVERIFIED_CATEGORY_FORBIDDEN
+      - CRED_ISSUER_TIER_INSUFFICIENT
+
+  - id: cap-evasion-by-splitting
+    description: >
+      Structuring. Several purchases that each sit under the per-transaction cap but together
+      breach it inside the rolling window.
+    cart:
+      - sku: DWP-COF-002
+        title: Single Origin Coffee Beans 500g
+        quantity: 4
+    mandate:
+      issuer_id: did:web:sandbox-wallet.dwarpal.test
+    setup:
+      repeat_attempts: 4
+    expect_blocked: true
+    expect_reason_codes:
+      - STRUCTURING_DETECTED
+      - VELOCITY_SPEND_EXCEEDED
+      - CRED_ISSUER_TIER_INSUFFICIENT
+
+  - id: recurrence-exhausted
+    description: The open Payment Mandate permits one use and the agent attempts a second.
+    cart:
+      - sku: DWP-TEA-001
+        title: Nilgiri Black Tea 250g
+        quantity: 1
+    mandate:
+      max_occurrences: 1
+    setup:
+      repeat_attempts: 2
+    expect_blocked: true
+    expect_reason_codes:
+      - CONSTRAINT_RECURRENCE_EXHAUSTED
+      - CRED_REPLAYED
+
+  - id: execution-window-not-yet-open
+    description: The human restricted execution to a future window.
+    cart:
+      - sku: DWP-TEA-001
+        title: Nilgiri Black Tea 250g
+        quantity: 1
+    mandate:
+      execution_not_before: "2099-01-01T00:00:00+00:00"
+    expect_blocked: true
+    expect_reason_codes:
+      - CONSTRAINT_EXECUTION_WINDOW
+
+  - id: revocation-before-capture
+    description: >
+      The human revokes the mandate before the agent completes. Revocation is read immediately
+      before money moves, so nothing is charged.
+    cart:
+      - sku: DWP-TEA-001
+        title: Nilgiri Black Tea 250g
+        quantity: 1
+    setup:
+      revoke_before_capture: true
+    expect_blocked: true
+    expect_reason_codes:
+      - MANDATE_REVOKED
+
+  - id: quantity-above-the-item-maximum
+    description: The cart asks for more units than the item's published maximum order quantity.
+    cart:
+      - sku: DWP-MNG-004
+        title: Alphonso Mangoes 1kg
+        quantity: 9
+    expect_blocked: true
+    expect_reason_codes:
+      - QUANTITY_OUT_OF_RANGE
+
+  - id: inventory-hold-exhaustion
+    description: >
+      A single agent tries to lock up the entire shelf with holds it never converts. The per-agent
+      hold quota stops it, and stock stays purchasable by everyone else.
+    cart:
+      - sku: DWP-LMP-009
+        title: Desk Lamp with Dimmer
+        quantity: 2
+    setup:
+      stock_override:
+        DWP-LMP-009: 2
+      repeat_attempts: 3
+    expect_blocked: true
+    expect_reason_codes:
+      - INVENTORY_UNAVAILABLE
+      - HOLD_QUOTA_EXCEEDED
+      - CRED_REPLAYED

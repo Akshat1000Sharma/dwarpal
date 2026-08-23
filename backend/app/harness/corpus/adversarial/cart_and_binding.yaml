@@ -1,0 +1,100 @@
+family: cart-and-binding
+description: >
+  Attacks on the binding between the merchant's signed Checkout and what the agent presents:
+  altered carts, price drift between quote and payment, stale quotes and policy-hash mismatches.
+
+scenarios:
+  - id: checkout-hash-does-not-cover-its-jwt
+    description: >
+      The closed mandate carries a checkout_hash that is not the digest of the checkout_jwt beside
+      it, which is what a naive implementation would fail to notice.
+    cart:
+      - sku: DWP-TEA-001
+        title: Nilgiri Black Tea 250g
+        quantity: 1
+    tamper:
+      altered_checkout_hash: this-is-not-the-real-digest
+    expect_blocked: true
+    expect_reason_codes:
+      - CHECKOUT_BINDING_MISMATCH
+
+  - id: price-altered-between-quote-and-payment
+    description: >
+      The Payment Mandate authorises one rupee while the merchant-signed Checkout says the real
+      total. The merchant must not settle for the smaller figure.
+    cart:
+      - sku: DWP-COF-002
+        title: Single Origin Coffee Beans 500g
+        quantity: 1
+    tamper:
+      payment_amount_minor: 100
+    expect_blocked: true
+    expect_reason_codes:
+      - PRICE_DRIFT
+
+  - id: payment-mandate-bound-to-another-checkout
+    description: The Payment Mandate names a transaction_id belonging to a different checkout.
+    cart:
+      - sku: DWP-TEA-001
+        title: Nilgiri Black Tea 250g
+        quantity: 1
+    tamper:
+      payment_transaction_id: some-other-checkout-digest
+    expect_blocked: true
+    expect_reason_codes:
+      - CHECKOUT_BINDING_MISMATCH
+
+  - id: stale-quote
+    description: The agent presents a valid chain against a quote that has already expired.
+    cart:
+      - sku: DWP-TEA-001
+        title: Nilgiri Black Tea 250g
+        quantity: 1
+    setup:
+      expire_quote: true
+    expect_blocked: true
+    expect_reason_codes:
+      - CHECKOUT_EXPIRED
+
+  - id: policy-hash-mismatch
+    description: >
+      The terms change between the quote and the checkout attempt, so the hash the agent
+      acknowledged is no longer the live one.
+    cart:
+      - sku: DWP-TEA-001
+        title: Nilgiri Black Tea 250g
+        quantity: 1
+    setup:
+      policy_changes_after_quote: true
+    expect_blocked: true
+    expect_reason_codes:
+      - POLICY_HASH_MISMATCH
+
+  - id: instrument-not-in-the-allowlist
+    description: The agent pays with an instrument the human never authorised.
+    cart:
+      - sku: DWP-TEA-001
+        title: Nilgiri Black Tea 250g
+        quantity: 1
+    tamper:
+      payment_instrument:
+        id: pi_attacker_card
+        type: CARD
+        description: an instrument the human never approved
+    expect_blocked: true
+    expect_reason_codes:
+      - CONSTRAINT_INSTRUMENT_NOT_ALLOWED
+
+  - id: payee-substituted
+    description: The agent redirects payment to a payee outside the human's allowlist.
+    cart:
+      - sku: DWP-TEA-001
+        title: Nilgiri Black Tea 250g
+        quantity: 1
+    tamper:
+      payee:
+        id: merchant-controlled-by-the-attacker
+        name: Not The Merchant
+    expect_blocked: true
+    expect_reason_codes:
+      - CONSTRAINT_PAYEE_NOT_ALLOWED

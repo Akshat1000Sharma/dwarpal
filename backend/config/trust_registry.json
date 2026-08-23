@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "description": "Issuing authorities Dwarpal recognises, and what each tier is permitted to do. Adding an authority is a configuration change, never a code change.",
+  "tiers": {
+    "unverified": {
+      "rank": 0,
+      "description": "No acceptable credential was presented. May browse, search, quote and hold, but not check out above the configured ceiling.",
+      "max_transaction_minor": 50000,
+      "allow_restricted_categories": false,
+      "allow_age_restricted": false,
+      "requires_key_binding": false
+    },
+    "provisional": {
+      "rank": 1,
+      "description": "Credential from a self-asserted or sandbox authority. Trusted for low value only.",
+      "max_transaction_minor": 250000,
+      "allow_restricted_categories": false,
+      "allow_age_restricted": false,
+      "requires_key_binding": true
+    },
+    "accredited": {
+      "rank": 2,
+      "description": "Credential from an authority that attests it obtained user consent on a trusted surface.",
+      "max_transaction_minor": 2000000,
+      "allow_restricted_categories": true,
+      "allow_age_restricted": false,
+      "requires_key_binding": true
+    },
+    "regulated": {
+      "rank": 3,
+      "description": "Credential from a supervised financial institution or payment network.",
+      "max_transaction_minor": 10000000,
+      "allow_restricted_categories": true,
+      "allow_age_restricted": true,
+      "requires_key_binding": true
+    }
+  },
+  "authorities": [
+    {
+      "issuer_id": "did:web:trusted-surface.dwarpal.test",
+      "name": "Dwarpal Reference Trusted Surface",
+      "tier": "accredited",
+      "jwks_source": "file",
+      "jwks": [],
+      "jwks_path": "./config/jwks/trusted-surface.json"
+    },
+    {
+      "issuer_id": "did:web:sandbox-wallet.dwarpal.test",
+      "name": "Sandbox Credential Provider",
+      "tier": "provisional",
+      "jwks_source": "file",
+      "jwks": [],
+      "jwks_path": "./config/jwks/sandbox-wallet.json"
+    },
+    {
+      "issuer_id": "did:web:bank.dwarpal.test",
+      "name": "Regulated Issuing Bank",
+      "tier": "regulated",
+      "jwks_source": "file",
+      "jwks": [],
+      "jwks_path": "./config/jwks/bank.json"
+    }
+  ]
+}

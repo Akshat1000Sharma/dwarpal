@@ -1,0 +1,16 @@
+The JSON Schema files under ap2/ and ucp/ in this directory are copied verbatim from the Agent
+Payments Protocol reference implementation:
+
+    https://github.com/google-agentic-commerce/AP2
+    code/sdk/schemas/
+
+They are redistributed here under the Apache License, Version 2.0, the licence of that project.
+A copy of the licence is available at http://www.apache.org/licenses/LICENSE-2.0
+
+They are vendored rather than fetched at runtime so that conformance checking works offline and in
+CI, and so that the exact schema revision Dwarpal was built against is recorded in this repository.
+No modifications have been made to their contents. That includes leaving the few non-ASCII
+characters upstream uses in its descriptions, which the rest of this repository avoids: editing
+them would mean these are no longer verbatim copies.
+
+Upstream revision vendored: e1ea56db72a6385bce3e5c1112b3a56ce60acb43 (2026-04-29)

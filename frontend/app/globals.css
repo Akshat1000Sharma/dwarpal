@@ -1,0 +1,71 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f7f7f8;
+  --surface: #ffffff;
+  --surface-muted: #f1f2f4;
+  --border: #e2e4e9;
+  --foreground: #16181d;
+  --muted: #656b78;
+  --accent: #1f4fd8;
+
+  --allow: #0f7a4a;
+  --allow-bg: #e6f4ec;
+  --deny: #b3261e;
+  --deny-bg: #fbeaea;
+  --escalate: #9a5b00;
+  --escalate-bg: #fdf1e0;
+  --challenge: #5b3fb5;
+  --challenge-bg: #efeafb;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0c0d10;
+    --surface: #15171c;
+    --surface-muted: #1c1f26;
+    --border: #2a2e37;
+    --foreground: #e8eaee;
+    --muted: #9aa1b1;
+    --accent: #6f95ff;
+
+    --allow: #5fd39b;
+    --allow-bg: #123024;
+    --deny: #ff8a80;
+    --deny-bg: #3a1a19;
+    --escalate: #f3bd63;
+    --escalate-bg: #3a2c12;
+    --challenge: #b9a5ff;
+    --challenge-bg: #26204a;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-line: var(--border);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-allow: var(--allow);
+  --color-allow-bg: var(--allow-bg);
+  --color-deny: var(--deny);
+  --color-deny-bg: var(--deny-bg);
+  --color-escalate: var(--escalate);
+  --color-escalate-bg: var(--escalate-bg);
+  --color-challenge: var(--challenge);
+  --color-challenge-bg: var(--challenge-bg);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+/* Wide tables scroll inside their own container; the page body never scrolls sideways. */
+.scroll-x {
+  overflow-x: auto;
+}

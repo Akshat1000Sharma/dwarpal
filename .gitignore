@@ -1,0 +1,52 @@
+# Working documents
+DETAILS.md
+IMPLEMENTATION_PLAN.md
+CLAUDE.md
+AGENTS.md
+.claude/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Signing keys
+secrets/
+*.pem
+*.key
+
+# Public keys mock authorities publish at run time. The trust registry names these paths and
+# tolerates the files being absent, so a fresh clone works without them.
+backend/config/jwks/*.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Node
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# Generated reports
+reports/

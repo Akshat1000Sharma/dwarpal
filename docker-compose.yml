@@ -1,0 +1,56 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: dwarpal-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-dwarpal}
+      POSTGRES_USER: ${DB_USER:-dwarpal}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-dwarpal}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - dwarpal-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-dwarpal} -d ${DB_NAME:-dwarpal}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    profiles: ["full"]
+    build:
+      context: ./backend
+    container_name: dwarpal-backend
+    restart: unless-stopped
+    env_file:
+      # Optional, so a fresh clone can build the images before .env exists.
+      - path: ./backend/.env
+        required: false
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - dwarpal-merchant-keys:/app/secrets/merchant_keys
+
+  frontend:
+    profiles: ["full"]
+    build:
+      context: ./frontend
+    container_name: dwarpal-frontend
+    restart: unless-stopped
+    environment:
+      BACKEND_ORIGIN: http://backend:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  dwarpal-pgdata:
+  dwarpal-merchant-keys:
