@@ -16,7 +16,15 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.checkout.complete import finalise_captured, finalise_failed
 from app.db.base import utcnow
-from app.db.models import Payment, PaymentException, PaymentStatus, Refund, RefundStatus
+from app.db.models import (
+    CheckoutSession,
+    CheckoutState,
+    Payment,
+    PaymentException,
+    PaymentStatus,
+    Refund,
+    RefundStatus,
+)
 from app.errors import AgentError
 from app.escalation import service as escalation_service
 from app.escalation import whatsapp
@@ -26,6 +34,45 @@ from app.payments.gateway import verify_webhook_signature
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["webhooks"])
+
+
+# Razorpay states in which the buyer's money is actually held.
+_LIVE_AT_GATEWAY = frozenset({"authorized", "captured"})
+# Local states in which Dwarpal has decided not to settle this checkout.
+_NOT_SETTLING = frozenset({CheckoutState.CANCELLED, CheckoutState.REFUSED})
+_ORPHANED_MONEY = "gateway_holds_money_for_a_checkout_we_will_not_settle"
+
+
+def _flag_orphaned_money(db: Session, payment_row: Payment, entity: dict[str, Any]) -> bool:
+    """File the case where the gateway holds money for a checkout Dwarpal has already closed.
+
+    Refusing to settle is correct and happens upstream of this. What must not happen is refusing
+    silently: the buyer's money is held against an order that will never be fulfilled, and nothing
+    reconciles it back. Razorpay is authoritative, so the disagreement is recorded, not corrected.
+    """
+    if str(entity.get("status")) not in _LIVE_AT_GATEWAY:
+        return False
+    checkout = db.get(CheckoutSession, payment_row.checkout_id)
+    if checkout is None or checkout.state not in _NOT_SETTLING:
+        return False
+    seen = db.scalar(
+        select(PaymentException).where(
+            PaymentException.correlation_id == payment_row.correlation_id,
+            PaymentException.kind == _ORPHANED_MONEY,
+        )
+    )
+    if seen is not None:
+        return False
+    db.add(
+        PaymentException(
+            correlation_id=payment_row.correlation_id,
+            payment_id=payment_row.id,
+            kind=_ORPHANED_MONEY,
+            local_state={"checkout_id": checkout.id, "checkout_state": checkout.state},
+            gateway_state=entity,
+        )
+    )
+    return True
 
 
 def _gateway_error(entity: dict[str, Any]) -> dict[str, Any]:
@@ -91,6 +138,12 @@ async def razorpay_webhook(
                         "checkout cancelled after a failed payment",
                         extra={"context": {"evidence_packet_id": packet_id}},
                     )
+            if _flag_orphaned_money(db, row, payment_entity):
+                handled.append("reconciliation.exception")
+                logger.warning(
+                    "gateway holds money for a checkout that will not be settled",
+                    extra={"context": {"correlation_id": row.correlation_id}},
+                )
             handled.append(event)
 
     if refund_entity:

@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -292,6 +293,79 @@ def test_razorpay_signature_covers_the_exact_bytes(client):
         "/webhooks/razorpay", content=tampered, headers={"X-Razorpay-Signature": signature}
     )
     assert response.status_code == 401
+
+
+def test_money_held_for_a_cancelled_checkout_is_filed_as_a_discrepancy(client, seeded, gateway):
+    """The gateway can authorise money for a checkout Dwarpal has already closed.
+
+    Refusing to settle it is correct. Refusing silently is not: the buyer's money is held against
+    an order that will never be fulfilled and nothing reconciles it back.
+    """
+    from app.checkout.complete import finalise_failed
+    from app.db.models import (
+        CheckoutSession,
+        CheckoutState,
+        Payment,
+        PaymentException,
+        PaymentStatus,
+    )
+    from tests.test_money_paths import _awaiting
+
+    correlation = "dwc_orphaned_money"
+    outcome = _awaiting(seeded, gateway, correlation)
+    payment = seeded.get(Payment, outcome.payment_id)
+    payment.razorpay_payment_id = "pay_orphaned"
+    payment.status = PaymentStatus.FAILED
+    seeded.flush()
+    finalise_failed(seeded, payment)
+    assert seeded.get(CheckoutSession, outcome.checkout_id).state == CheckoutState.CANCELLED
+
+    def deliver() -> dict[str, Any]:
+        body = json.dumps(
+            {
+                "entity": "event",
+                "event": "payment.authorized",
+                "contains": ["payment"],
+                "payload": {
+                    "payment": {
+                        "entity": {
+                            "id": "pay_orphaned",
+                            "entity": "payment",
+                            "amount": payment.amount_minor,
+                            "currency": "INR",
+                            "status": "authorized",
+                            "method": "netbanking",
+                        }
+                    }
+                },
+            },
+            separators=(",", ":"),
+        ).encode()
+        signature = hmac.new(
+            settings.RAZORPAY_WEBHOOK_SECRET.encode(), body, hashlib.sha256
+        ).hexdigest()
+        response = client.post(
+            "/webhooks/razorpay",
+            content=body,
+            headers={"Content-Type": "application/json", "X-Razorpay-Signature": signature},
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    assert "reconciliation.exception" in deliver()["handled"]
+    # A redelivered webhook must not file the same disagreement twice.
+    assert "reconciliation.exception" not in deliver()["handled"]
+
+    filed = seeded.scalars(
+        select(PaymentException).where(PaymentException.correlation_id == correlation)
+    ).all()
+    assert len(filed) == 1
+    assert filed[0].local_state["checkout_state"] == CheckoutState.CANCELLED
+    assert filed[0].gateway_state["status"] == "authorized"
+    assert filed[0].resolved is False
+
+    # Nothing may be settled on the strength of that authorisation.
+    assert seeded.get(CheckoutSession, outcome.checkout_id).state == CheckoutState.CANCELLED
 
 
 def test_a_refund_that_fails_after_creation_is_filed_as_a_discrepancy(client, seeded):
