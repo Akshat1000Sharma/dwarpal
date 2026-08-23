@@ -69,7 +69,11 @@ def parse_inbound(payload: dict[str, Any]) -> list[InboundAnswer]:
                 sender = message.get("from")
                 interactive = message.get("interactive") or {}
                 reply = interactive.get("button_reply") or interactive.get("list_reply") or {}
-                reply_id = str(reply.get("id", ""))
+                # A free-form interactive message returns the button id under "interactive"; a
+                # template quick reply returns the send-time payload under "button" instead. Both
+                # carry the same value, so both are read here.
+                template_reply = (message.get("button") or {}).get("payload", "")
+                reply_id = str(reply.get("id", "") or template_reply)
                 text = str((message.get("text") or {}).get("body", "")).strip()
 
                 escalation_id: str | None = None
@@ -147,6 +151,69 @@ def default_transport() -> WhatsAppTransport:
     if settings.APP_ENV == "testing":
         return RecordingTransport()
     return CloudApiTransport()
+
+
+def _one_line(value: str, limit: int) -> str:
+    """Template parameters may not contain newlines or tabs, and are length capped by Meta."""
+    return " ".join(str(value).split())[:limit]
+
+
+def build_approval_template_message(
+    *,
+    to_number: str,
+    escalation_id: str,
+    merchant_name: str,
+    amount_minor: int,
+    currency: str,
+    cart_summary: str,
+    constraint_text: str,
+    template_name: str,
+    language_code: str,
+) -> dict[str, Any]:
+    """The same prompt as an approved template, for use outside the customer service window.
+
+    A business may only send free-form messages within 24 hours of the person's last message.
+    Outside it the Cloud API accepts the send and delivers nothing, so an escalation raised from a
+    quiet inbox would never reach the human. An approved template always delivers, and its quick
+    reply payloads are set per send, which is what carries the escalation id back.
+    """
+    major = amount_minor / 100
+    return {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to_number,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": language_code},
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": _one_line(merchant_name, 60)},
+                        {"type": "text", "text": f"{currency} {major:.2f}"},
+                        {"type": "text", "text": _one_line(cart_summary, 300)},
+                        {"type": "text", "text": _one_line(constraint_text, 300)},
+                        {"type": "text", "text": _one_line(escalation_id, 64)},
+                    ],
+                },
+                {
+                    "type": "button",
+                    "sub_type": "quick_reply",
+                    "index": "0",
+                    "parameters": [
+                        {"type": "payload", "payload": f"{APPROVE_ID}:{escalation_id}"}
+                    ],
+                },
+                {
+                    "type": "button",
+                    "sub_type": "quick_reply",
+                    "index": "1",
+                    "parameters": [{"type": "payload", "payload": f"{DENY_ID}:{escalation_id}"}],
+                },
+            ],
+        },
+    }
 
 
 def build_approval_message(

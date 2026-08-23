@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     META_APP_SECRET: str = Field(min_length=1)
     META_APP_ID: str = ""
     META_GRAPH_VERSION: str = "v23.0"
+    # Set once an approved Utility template exists. Empty means send the free-form interactive
+    # message, which Meta only delivers inside the 24 hour customer service window.
+    META_TEMPLATE_NAME: str = ""
+    META_TEMPLATE_LANGUAGE: str = "en"
     ESCALATION_HUMAN_WHATSAPP: str = ""
     ESCALATION_DEADLINE_SECONDS: int = 900
 

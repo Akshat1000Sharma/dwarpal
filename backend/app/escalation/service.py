@@ -24,6 +24,7 @@ from app.db.models import Escalation, EscalationResponse, EscalationStatus
 from app.escalation.whatsapp import (
     WhatsAppTransport,
     build_approval_message,
+    build_approval_template_message,
     default_transport,
 )
 from app.logging import get_logger
@@ -99,17 +100,24 @@ def raise_escalation(
         return escalation
 
     try:
-        response = sender.send(
-            build_approval_message(
-                to_number=recipient,
-                escalation_id=escalation.id,
-                merchant_name=settings.MERCHANT_NAME,
-                amount_minor=amount_minor,
-                currency=currency,
-                cart_summary=cart_summary,
-                constraint_text=constraint_text,
+        common = {
+            "to_number": recipient,
+            "escalation_id": escalation.id,
+            "merchant_name": settings.MERCHANT_NAME,
+            "amount_minor": amount_minor,
+            "currency": currency,
+            "cart_summary": cart_summary,
+            "constraint_text": constraint_text,
+        }
+        if settings.META_TEMPLATE_NAME:
+            message = build_approval_template_message(
+                **common,
+                template_name=settings.META_TEMPLATE_NAME,
+                language_code=settings.META_TEMPLATE_LANGUAGE,
             )
-        )
+        else:
+            message = build_approval_message(**common)
+        response = sender.send(message)
         messages = response.get("messages") or []
         if messages:
             escalation.channel_message_id = str(messages[0].get("id"))

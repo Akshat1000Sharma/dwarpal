@@ -459,6 +459,83 @@ def test_a_refund_that_fails_after_creation_is_filed_as_a_discrepancy(client, se
     assert filed[0].resolved is False
 
 
+def test_a_template_quick_reply_is_understood_like_an_interactive_one():
+    """An approved template returns the tap under a different key than a free-form message.
+
+    Free-form interactive replies arrive as interactive.button_reply.id; a template quick reply
+    arrives as button.payload. Both carry the escalation id, so a template tap must not be read as
+    an unknown answer that silently loses the reference.
+    """
+    from app.escalation.whatsapp import parse_inbound
+
+    escalation_id = "e3b0c44298fc1c149afbf4c8996fb924"
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "id": "waba",
+                "changes": [
+                    {
+                        "field": "messages",
+                        "value": {
+                            "messaging_product": "whatsapp",
+                            "messages": [
+                                {
+                                    "from": "919999999999",
+                                    "id": "wamid.template",
+                                    "type": "button",
+                                    "button": {
+                                        "payload": f"dwarpal_deny:{escalation_id}",
+                                        "text": "Deny",
+                                    },
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    answers = parse_inbound(payload)
+    assert len(answers) == 1
+    assert answers[0].answer == "deny"
+    assert answers[0].escalation_id == escalation_id
+
+
+def test_the_template_send_carries_the_escalation_id_in_both_button_payloads():
+    """The quick reply payloads are set per send. They are the only route the id travels back."""
+    from app.escalation.whatsapp import build_approval_template_message
+
+    message = build_approval_template_message(
+        to_number="919999999999",
+        escalation_id="abc123",
+        merchant_name="Dwarpal Demo Store",
+        amount_minor=45000,
+        currency="INR",
+        cart_summary="Nilgiri Black Tea 250g x1\nsecond line",
+        constraint_text="only buy stationery that is\trecycled",
+        template_name="dwarpal_purchase_approval",
+        language_code="en",
+    )
+
+    assert message["type"] == "template"
+    assert message["template"]["name"] == "dwarpal_purchase_approval"
+
+    components = message["template"]["components"]
+    body = next(c for c in components if c["type"] == "body")
+    assert len(body["parameters"]) == 5
+    assert body["parameters"][1]["text"] == "INR 450.00"
+    # Meta rejects newlines and tabs inside template parameters.
+    for parameter in body["parameters"]:
+        assert not set(parameter["text"]) & {chr(10), chr(9)}
+
+    buttons = [c for c in components if c["type"] == "button"]
+    assert [b["index"] for b in buttons] == ["0", "1"]
+    assert buttons[0]["parameters"][0]["payload"] == "dwarpal_approve:abc123"
+    assert buttons[1]["parameters"][0]["payload"] == "dwarpal_deny:abc123"
+
+
 def test_whatsapp_subscription_handshake(client):
     ok = client.get(
         "/webhooks/whatsapp",
