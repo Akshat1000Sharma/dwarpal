@@ -113,6 +113,35 @@ export function KillSwitch({
   );
 }
 
+export function ResolveException({
+  exceptionId,
+  action,
+}: {
+  exceptionId: string;
+  action: (exceptionId: string) => Promise<ActionResult>;
+}) {
+  const [pending, start] = useTransition();
+  const [result, setResult] = useState<ActionResult | null>(null);
+
+  return (
+    <div>
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() =>
+          start(async () => {
+            setResult(await action(exceptionId));
+          })
+        }
+        className="rounded border border-line px-2 py-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
+      >
+        {pending ? "Saving..." : "Mark reconciled"}
+      </button>
+      <Feedback result={result} />
+    </div>
+  );
+}
+
 export function AgentLimits({
   agentId,
   spendMinor,

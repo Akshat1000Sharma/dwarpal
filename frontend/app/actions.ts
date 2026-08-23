@@ -71,6 +71,18 @@ export async function updateAgentLimits(
   }
 }
 
+export async function resolveException(exceptionId: string): Promise<ActionResult> {
+  try {
+    await backendFetch(`/merchant/exceptions/${encodeURIComponent(exceptionId)}/resolve`, {
+      method: "POST",
+    });
+    revalidatePath("/");
+    return { ok: true, message: "Exception marked as reconciled." };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
 export async function openDispute(correlationId: string, claim: string): Promise<ActionResult> {
   try {
     const created = await backendFetch<{ id: string }>("/merchant/disputes", {

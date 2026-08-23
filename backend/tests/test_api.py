@@ -295,6 +295,34 @@ def test_razorpay_signature_covers_the_exact_bytes(client):
     assert response.status_code == 401
 
 
+def test_a_discrepancy_can_be_reconciled_without_rewriting_either_record(client, seeded):
+    """Resolving says a human dealt with it. It must not edit what either side reported."""
+    from app.db.models import PaymentException
+
+    filed = PaymentException(
+        correlation_id="dwc_resolvable",
+        payment_id="pay_resolvable",
+        kind="gateway_holds_money_for_a_checkout_we_will_not_settle",
+        local_state={"checkout_state": "cancelled"},
+        gateway_state={"id": "pay_resolvable", "status": "authorized", "amount": 45000},
+    )
+    seeded.add(filed)
+    seeded.flush()
+
+    listed = client.get("/merchant/exceptions").json()["exceptions"]
+    assert any(e["id"] == filed.id and e["resolved"] is False for e in listed)
+
+    response = client.post(f"/merchant/exceptions/{filed.id}/resolve")
+    assert response.status_code == 200, response.text
+    assert response.json()["resolved"] is True
+
+    assert filed.resolved is True
+    assert filed.local_state == {"checkout_state": "cancelled"}
+    assert filed.gateway_state["status"] == "authorized"
+
+    assert client.post("/merchant/exceptions/does-not-exist/resolve").status_code == 404
+
+
 def test_money_held_for_a_cancelled_checkout_is_filed_as_a_discrepancy(client, seeded, gateway):
     """The gateway can authorise money for a checkout Dwarpal has already closed.
 

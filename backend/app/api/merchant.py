@@ -412,6 +412,23 @@ def exceptions(db: Annotated[Session, Depends(get_db)]) -> dict[str, Any]:
     }
 
 
+@router.post("/exceptions/{exception_id}/resolve")
+def resolve_exception(
+    exception_id: str, db: Annotated[Session, Depends(get_db)]
+) -> dict[str, Any]:
+    """Mark a recorded disagreement as dealt with.
+
+    Resolving is a statement that a human has reconciled it, not a correction of either record:
+    the local and gateway snapshots are kept exactly as they were filed.
+    """
+    row = db.get(PaymentException, exception_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"unknown exception {exception_id}")
+    row.resolved = True
+    db.flush()
+    return {"id": row.id, "kind": row.kind, "resolved": row.resolved}
+
+
 @router.get("/disputes")
 def disputes(db: Annotated[Session, Depends(get_db)]) -> dict[str, Any]:
     rows = list(db.scalars(select(Dispute).order_by(desc(Dispute.claimed_at)).limit(100)).all())

@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { resolveException } from "@/app/actions";
+import { ResolveException } from "@/components/controls";
 import { BackendDown, Card, Cell, DecisionBadge, Empty, ReasonCode, Row, Stat, Table } from "@/components/ui";
 import { backendReachable, backendRead } from "@/lib/backend";
 import { relative } from "@/lib/format";
@@ -84,7 +86,7 @@ export default async function OverviewPage() {
               title="Payment exceptions"
               description="Razorpay is authoritative. A disagreement is recorded here rather than silently corrected."
             >
-              <Table head={["Kind", "Correlation", "Seen"]}>
+              <Table head={["Kind", "Correlation", "Seen", ""]}>
                 {openExceptions.slice(0, 6).map((exception) => (
                   <Row key={exception.id}>
                     <Cell>
@@ -92,6 +94,12 @@ export default async function OverviewPage() {
                     </Cell>
                     <Cell mono>{exception.correlation_id}</Cell>
                     <Cell>{relative(exception.created_at)}</Cell>
+                    <Cell>
+                      <ResolveException
+                        exceptionId={exception.id}
+                        action={resolveException}
+                      />
+                    </Cell>
                   </Row>
                 ))}
               </Table>
