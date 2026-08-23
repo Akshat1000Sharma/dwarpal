@@ -71,26 +71,32 @@ class TimingRecorder:
         return [s.as_dict() for s in self.steps]
 
 
-def _carried_forward(session: Session, correlation_id: str, claim: str) -> dict[str, Any]:
-    """Recover a claim recorded by an earlier packet under the same correlation id.
+def _carried_forward(
+    session: Session, correlation_id: str, claims: tuple[str, ...]
+) -> dict[str, dict[str, Any]]:
+    """Recover claims recorded by an earlier packet under the same correlation id.
 
     A checkout finalised by webhook is settled in a later request than the one that verified the
     credentials, so the settling call has no chain of its own to record. Without this the closing
     packet would be the only one a dispute reads and would show no authority at all.
+
+    Every claim is resolved from one pass over the packets, because this runs on the settlement
+    path of every real payment.
     """
-    for row in reversed(
-        list(
-            session.scalars(
-                select(EvidencePacket)
-                .where(EvidencePacket.correlation_id == correlation_id)
-                .order_by(EvidencePacket.seq)
-            ).all()
-        )
-    ):
-        value = (row.body or {}).get(claim)
-        if value:
-            return value
-    return {}
+    found: dict[str, dict[str, Any]] = {}
+    rows = session.scalars(
+        select(EvidencePacket)
+        .where(EvidencePacket.correlation_id == correlation_id)
+        .order_by(EvidencePacket.seq.desc())
+    ).all()
+    for row in rows:
+        body = row.body or {}
+        for claim in claims:
+            if claim not in found and body.get(claim):
+                found[claim] = body[claim]
+        if len(found) == len(claims):
+            break
+    return found
 
 
 def build(
@@ -107,8 +113,10 @@ def build(
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Collect everything recorded under this correlation id into one immutable body."""
-    credentials = credentials or _carried_forward(session, correlation_id, "credential_chain")
-    verification = verification or _carried_forward(session, correlation_id, "verification")
+    if not credentials or not verification:
+        inherited = _carried_forward(session, correlation_id, ("credential_chain", "verification"))
+        credentials = credentials or inherited.get("credential_chain")
+        verification = verification or inherited.get("verification")
     verdict_rows = list(
         session.scalars(
             select(VerdictRow)

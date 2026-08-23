@@ -1,4 +1,4 @@
-"""Payment execution and reconciliation.
+"""Payment execution.
 
 Two rules are enforced in code rather than by convention:
 
@@ -20,7 +20,6 @@ from sqlalchemy.orm import Session
 from app.db.base import utcnow
 from app.db.models import (
     Payment,
-    PaymentException,
     PaymentStatus,
     Refund,
     RefundStatus,
@@ -206,80 +205,6 @@ def refund(
     if row.status == RefundStatus.PROCESSED and amount >= payment.amount_minor:
         payment.status = PaymentStatus.REFUNDED
     session.flush()
-    return row
-
-
-def reconcile(
-    session: Session, payment: Payment, *, gateway: PaymentGateway | None = None
-) -> PaymentException | None:
-    """Compare the local record against Razorpay. Razorpay wins; disagreement is recorded.
-
-    Nothing is corrected here. A silent correction would erase the evidence that the two ever
-    disagreed, which is exactly what an operator needs to see.
-    """
-    client = gateway or get_gateway()
-    if not payment.razorpay_payment_id:
-        return None
-    try:
-        remote = client.fetch_payment(payment.razorpay_payment_id)
-    except GatewayError as exc:
-        return _record_exception(
-            session, payment, "gateway_unreachable", {"error": str(exc)}
-        )
-
-    local_state = {
-        "status": payment.status,
-        "amount_minor": payment.amount_minor,
-        "currency": payment.currency,
-    }
-    remote_status = str(remote.get("status"))
-    remote_amount = int(remote.get("amount", 0))
-    mismatches: dict[str, Any] = {}
-
-    expected = {
-        PaymentStatus.CAPTURED: {"captured", "refunded"},
-        PaymentStatus.AUTHORIZED: {"authorized", "captured", "refunded"},
-        PaymentStatus.CREATED: {"created", "authorized"},
-        PaymentStatus.FAILED: {"failed"},
-        PaymentStatus.REFUNDED: {"refunded", "captured"},
-    }.get(PaymentStatus(payment.status), set())
-    if remote_status not in expected:
-        mismatches["status"] = {"local": payment.status, "gateway": remote_status}
-    if remote_amount and remote_amount != payment.amount_minor:
-        mismatches["amount"] = {"local": payment.amount_minor, "gateway": remote_amount}
-
-    payment.reconciled_at = utcnow()
-    snapshot = dict(payment.gateway_snapshot or {})
-    snapshot["reconciliation"] = remote
-    payment.gateway_snapshot = snapshot
-    session.flush()
-
-    if not mismatches:
-        return None
-    return _record_exception(
-        session,
-        payment,
-        "reconciliation_discrepancy",
-        {"mismatches": mismatches, "gateway": remote, "local": local_state},
-    )
-
-
-def _record_exception(
-    session: Session, payment: Payment, kind: str, detail: dict[str, Any]
-) -> PaymentException:
-    row = PaymentException(
-        correlation_id=payment.correlation_id,
-        payment_id=payment.id,
-        kind=kind,
-        local_state={"status": payment.status, "amount_minor": payment.amount_minor},
-        gateway_state=detail,
-    )
-    session.add(row)
-    session.flush()
-    logger.warning(
-        "payment exception recorded",
-        extra={"context": {"kind": kind, "payment_id": payment.id}},
-    )
     return row
 
 

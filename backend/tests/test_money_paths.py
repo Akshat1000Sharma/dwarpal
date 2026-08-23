@@ -20,6 +20,7 @@ from app.harness import factory
 from app.kernel import budget, revocation, velocity
 from app.kernel.reasons import Decision, ReasonCode
 from app.kernel.verdict import KernelAction, allow, record, refuse
+from app.payments import reconcile as reconciliation
 from app.payments import service as payments
 from app.payments.gateway import GatewayError, StubGateway
 from app.verification.pipeline import verify
@@ -305,7 +306,7 @@ def test_reconciliation_records_a_discrepancy_rather_than_correcting_it(seeded):
 
     # Razorpay now disagrees with the local record.
     gateway.payments[payment.razorpay_payment_id]["status"] = "failed"
-    exception = payments.reconcile(db, payment, gateway=gateway)
+    exception = reconciliation.reconcile(db, payment, gateway=gateway)
 
     assert exception is not None
     assert exception.kind == "reconciliation_discrepancy"

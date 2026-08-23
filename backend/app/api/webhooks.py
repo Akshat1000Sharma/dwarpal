@@ -131,8 +131,13 @@ async def razorpay_webhook(
                 if row.status == PaymentStatus.CREATED:
                     row.status = PaymentStatus.AUTHORIZED
             elif event == "payment.failed":
-                row.status = PaymentStatus.FAILED
-                packet_id = finalise_failed(db, row, error=_gateway_error(payment_entity))
+                # Razorpay does not guarantee ordering. A failure arriving after a capture must not
+                # rewrite a payment whose money actually moved.
+                if row.status in (PaymentStatus.CREATED, PaymentStatus.AUTHORIZED):
+                    row.status = PaymentStatus.FAILED
+                    packet_id = finalise_failed(db, row, error=_gateway_error(payment_entity))
+                else:
+                    packet_id = None
                 if packet_id:
                     logger.info(
                         "checkout cancelled after a failed payment",

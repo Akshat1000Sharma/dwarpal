@@ -111,9 +111,12 @@ def recent(session: Session, limit: int = 50, offset: int = 0) -> list[EvidenceP
     )
 
 
-def export_rows(session: Session) -> list[dict[str, Any]]:
+def export_rows(session: Session, *, seqs: set[int] | None = None) -> list[dict[str, Any]]:
     """The exact shape the standalone verifier reads."""
-    packets = session.scalars(select(EvidencePacket).order_by(EvidencePacket.seq)).all()
+    statement = select(EvidencePacket).order_by(EvidencePacket.seq)
+    if seqs is not None:
+        statement = statement.where(EvidencePacket.seq.in_(sorted(seqs)))
+    packets = session.scalars(statement).all()
     return [
         {
             "seq": p.seq,
@@ -129,28 +132,43 @@ def export_rows(session: Session) -> list[dict[str, Any]]:
     ]
 
 
-def verify_chain(session: Session) -> dict[str, Any]:
-    """In-process chain check. The authoritative check is the standalone tool in tools/."""
-    rows = export_rows(session)
+def verify_chain(session: Session, *, seqs: set[int] | None = None) -> dict[str, Any]:
+    """In-process chain check. The authoritative check is the standalone tool in tools/.
+
+    ``seqs`` restricts the rehashing to the packets a caller is actually rendering, plus each one's
+    predecessor so its link can still be checked. Reading and rehashing every packet ever written
+    is right for a command line sweep and far too much work for a page view.
+    """
+    total = int(session.scalar(select(func.count(EvidencePacket.seq))) or 0)
+    scoped = seqs is not None
+    if scoped:
+        assert seqs is not None
+        rows = export_rows(session, seqs=set(seqs) | {s - 1 for s in seqs if s > 1})
+    else:
+        rows = export_rows(session)
+
     problems: list[dict[str, Any]] = []
-    expected_prev = GENESIS_HASH
+    by_seq = {row["seq"]: row for row in rows}
     expected_seq = 1
     for row in rows:
-        if row["seq"] != expected_seq:
-            problems.append(
-                {"seq": row["seq"], "problem": "sequence_gap", "expected": expected_seq}
-            )
-        if row["prev_hash"] != expected_prev:
-            problems.append({"seq": row["seq"], "problem": "broken_link"})
+        seq = row["seq"]
+        if not scoped:
+            if seq != expected_seq:
+                problems.append({"seq": seq, "problem": "sequence_gap", "expected": expected_seq})
+            expected_seq = seq + 1
+        elif seq not in seqs:
+            continue
+        previous = by_seq.get(seq - 1)
+        expected_prev = GENESIS_HASH if seq == 1 else (previous or {}).get("entry_hash")
+        if expected_prev is not None and row["prev_hash"] != expected_prev:
+            problems.append({"seq": seq, "problem": "broken_link"})
         recomputed = compute_entry_hash(
-            seq=row["seq"],
+            seq=seq,
             correlation_id=row["correlation_id"],
             prev_hash=row["prev_hash"],
             body=row["body"],
             created_at=row["created_at"],
         )
         if recomputed != row["entry_hash"]:
-            problems.append({"seq": row["seq"], "problem": "body_altered"})
-        expected_prev = row["entry_hash"]
-        expected_seq = row["seq"] + 1
-    return {"packets": len(rows), "valid": not problems, "problems": problems}
+            problems.append({"seq": seq, "problem": "body_altered"})
+    return {"packets": total, "valid": not problems, "problems": problems}

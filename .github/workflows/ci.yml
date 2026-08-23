@@ -51,6 +51,7 @@ jobs:
       META_PHONE_NUMBER_ID: "0000000000"
       META_VERIFY_TOKEN: ci-verify-token
       META_APP_SECRET: ci-app-secret
+      MERCHANT_API_TOKEN: ci-merchant-token
       MERCHANT_KEY_ID: dwarpal-merchant-ci
       MERCHANT_SIGNING_KEY_DIR: ./secrets/merchant_keys
       TRUST_REGISTRY_PATH: ./config/trust_registry.json
@@ -136,6 +137,7 @@ jobs:
       GEMINI_API_KEY: ci-gemini-key
       META_VERIFY_TOKEN: ci-verify-token
       META_APP_SECRET: ci-app-secret
+      MERCHANT_API_TOKEN: ci-merchant-token
       MERCHANT_KEY_ID: dwarpal-merchant-ci
       MERCHANT_SIGNING_KEY_DIR: ./secrets/merchant_keys
       TRUST_REGISTRY_PATH: ./config/trust_registry.json

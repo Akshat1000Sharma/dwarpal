@@ -55,6 +55,7 @@ from app.kernel.verdict import KernelAction, allow, refuse
 from app.kernel.verdict import record as record_verdict
 from app.keys import merchant_key
 from app.logging import get_logger
+from app.payments import reconcile as reconciliation
 from app.payments import service as payments
 from app.payments.gateway import GatewayError, PaymentGateway, get_gateway
 from app.semantic.check import SemanticClient, SemanticOutcome, SemanticResult, evaluate_all
@@ -670,7 +671,7 @@ def complete(
     row.state = CheckoutState.COMPLETED
     session.flush()
 
-    payments.reconcile(session, payment, gateway=gateway)
+    reconciliation.reconcile(session, payment, gateway=gateway)
 
     receipt_body, receipt_jwt = _receipt(
         status=ReceiptStatus.SUCCESS,

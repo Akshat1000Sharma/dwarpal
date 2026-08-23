@@ -44,6 +44,7 @@ def _bootstrap_environment() -> None:
         "GEMINI_API_KEY": "ci-gemini-key",
         "META_VERIFY_TOKEN": "ci-verify-token",
         "META_APP_SECRET": "ci-app-secret",
+        "MERCHANT_API_TOKEN": "test-merchant-token",
         "MERCHANT_KEY_ID": "dwarpal-merchant-test",
         "MERCHANT_SIGNING_KEY_DIR": "./secrets/merchant_keys_test",
         "TRUST_REGISTRY_PATH": "./config/trust_registry.json",

@@ -279,9 +279,15 @@ _gateway: PaymentGateway | None = None
 
 
 def get_gateway() -> PaymentGateway:
+    """The gateway used when a caller does not supply one.
+
+    Real Razorpay in normal operation, and the stub under APP_ENV=testing, matching how the
+    WhatsApp transport is selected. Without this the HTTP stack cannot be exercised without
+    reaching the live Razorpay API, so an offline run has to be given credentials that work.
+    """
     global _gateway
     if _gateway is None:
-        _gateway = RazorpayGateway()
+        _gateway = StubGateway() if settings.APP_ENV == "testing" else RazorpayGateway()
     return _gateway
 
 

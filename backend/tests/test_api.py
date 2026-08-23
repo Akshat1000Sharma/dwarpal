@@ -28,7 +28,11 @@ def client(seeded, gateway) -> Iterator[TestClient]:
     application = create_app()
     application.dependency_overrides[deps.get_db] = lambda: seeded
 
-    with TestClient(application, raise_server_exceptions=False) as test_client:
+    with TestClient(
+        application,
+        raise_server_exceptions=False,
+        headers={"X-Merchant-Token": settings.MERCHANT_API_TOKEN},
+    ) as test_client:
         yield test_client
 
     application.dependency_overrides.clear()
@@ -36,6 +40,21 @@ def client(seeded, gateway) -> Iterator[TestClient]:
 
 
 # --- discovery and catalog -------------------------------------------------------------------
+
+
+def test_the_merchant_surface_refuses_an_unauthenticated_caller(client):
+    """These endpoints revoke mandates and stop agents, and the runbook tunnels this port."""
+    assert client.get("/merchant/agents", headers={"X-Merchant-Token": ""}).status_code == 401
+    assert (
+        client.post(
+            "/merchant/mandates/any/revoke",
+            json={"reason": "should never be applied"},
+            headers={"X-Merchant-Token": "wrong-token"},
+        ).status_code
+        == 401
+    )
+    # The agent surface is unaffected; authority there comes from the credential chain.
+    assert client.get("/catalog/items").status_code == 200
 
 
 def test_discovery_document_tells_an_agent_everything_it_needs(client):

@@ -101,6 +101,8 @@ class Client:
                 "Content-Type": "application/json",
                 "Accept": "application/json",
                 "ngrok-skip-browser-warning": "1",
+                # The merchant surface is guarded; the driver reads and revokes mandates on it.
+                "X-Merchant-Token": settings.MERCHANT_API_TOKEN,
                 **(headers or {}),
             },
         )

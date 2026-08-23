@@ -9,7 +9,7 @@ read-and-quote only: completing a checkout requires presenting the credential ch
 through the HTTP endpoint where the full verification pipeline runs.
 
     python -m app.mcp.server              stdio, for an MCP client that spawns the process
-    python -m app.mcp.server --http       streamable HTTP on MCP_PORT
+    python -m app.mcp.server --http       streamable HTTP on --port (default 8765)
 """
 
 # No postponed annotations here: FastMCP inspects the real annotation objects when it builds each

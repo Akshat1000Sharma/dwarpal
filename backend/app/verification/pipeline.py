@@ -207,6 +207,30 @@ def _verify_against_any(
     raise last or JoseError("no issuer key is registered for this authority")
 
 
+def _check_key_binding_freshness(
+    verified: Any, moment: datetime, label: str
+) -> VerificationResult | None:
+    """Bound how old a proof of possession may be.
+
+    Applied to both open mandates. The credential's own validity window says nothing about when the
+    holder proved possession of the key, so a replayed key binding would otherwise be accepted for
+    as long as the mandate itself lives.
+    """
+    kb_iat = verified.kb_claims.get("iat")
+    if kb_iat is None:
+        return None
+    drift = abs(int(moment.timestamp()) - int(kb_iat))
+    if drift > _skew() + settings.INVENTORY_HOLD_TTL_SECONDS:
+        return _fail(
+            4,
+            ReasonCode.CRED_EXPIRED,
+            f"the open {label} Mandate key binding proof is too old",
+            kb_iat=int(kb_iat),
+            drift_seconds=drift,
+        )
+    return None
+
+
 def _check_window(claims: dict[str, Any], now: datetime, label: str) -> VerificationResult | None:
     skew = _skew()
     exp = claims.get("exp")
@@ -345,17 +369,9 @@ def verify(
         failure = _check_window(claims, moment, label)
         if failure is not None:
             return failure
-    kb_iat = open_verified.kb_claims.get("iat")
-    if kb_iat is not None:
-        drift = abs(int(moment.timestamp()) - int(kb_iat))
-        if drift > _skew() + settings.INVENTORY_HOLD_TTL_SECONDS:
-            return _fail(
-                4,
-                ReasonCode.CRED_EXPIRED,
-                "key binding proof is too old",
-                kb_iat=int(kb_iat),
-                drift_seconds=drift,
-            )
+    failure = _check_key_binding_freshness(open_verified, moment, "Checkout")
+    if failure is not None:
+        return failure
     steps.append(STEP_NAMES[4])
 
     # ---- step 5: replay -----------------------------------------------------------------------
@@ -582,6 +598,10 @@ def _verify_payment(
         return _fail(1, ReasonCode.CRED_SCHEMA_INVALID, str(exc), errors=exc.errors[:5])
 
     failure = _check_window(open_claims, moment, "open Payment Mandate")
+    if failure is not None:
+        return failure
+
+    failure = _check_key_binding_freshness(open_verified, moment, "Payment")
     if failure is not None:
         return failure
 

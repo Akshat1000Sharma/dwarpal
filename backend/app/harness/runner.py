@@ -11,7 +11,7 @@ perfectly against attacks and is useless. Both numbers are always reported toget
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -23,7 +23,7 @@ from app.catalog import policy_terms
 from app.checkout import quote
 from app.checkout.complete import complete
 from app.db.base import utcnow
-from app.db.models import Product
+from app.db.models import CheckoutSession, PaymentStatus, Product
 from app.escalation.whatsapp import RecordingTransport
 from app.harness import factory
 from app.kernel import revocation
@@ -224,14 +224,29 @@ def run_scenario(
         if setup.get("revoke_before_capture"):
             _revoke_mandate(session, presentation)
 
-        outcome = complete(
-            session,
-            presentation.credentials,
-            correlation_id=f"{correlation}_{attempt}",
-            gateway=gateway,
-            semantic_client=KeywordSemanticClient(),
-            whatsapp=RecordingTransport(),
-        )
+        if setup.get("revoke_between_authorisation_and_capture"):
+            outcome = _settle_with_revocation_in_flight(
+                session, presentation, f"{correlation}_{attempt}", gateway
+            )
+        else:
+            outcome = complete(
+                session,
+                presentation.credentials,
+                correlation_id=f"{correlation}_{attempt}",
+                gateway=gateway,
+                semantic_client=KeywordSemanticClient(),
+                whatsapp=RecordingTransport(),
+            )
+
+        # Revoking once this attempt has settled leaves the next attempt, which gets its own quote
+        # and its own presentation, as the mandate's next use. That is the case being scored. The
+        # mandate is taken from the settled checkout rather than re-verified from the credentials,
+        # which have been consumed by now and would fail replay before revocation was reached.
+        if setup.get("revoke_after_capture") and attempt == 0:
+            settled = session.get(CheckoutSession, outcome.checkout_id)
+            if settled is not None and settled.mandate_id:
+                revocation.revoke(session, settled.mandate_id, "revoked by the corpus")
+                session.flush()
 
         if setup.get("replay_same_credentials"):
             outcome = complete(
@@ -256,6 +271,56 @@ def run_scenario(
 
     assert last is not None
     return last
+
+
+def _settle_with_revocation_in_flight(
+    session: Session,
+    presentation: factory.Presentation,
+    correlation: str,
+    gateway: StubGateway,
+) -> Any:
+    """Revoke after the order is authorised but before capture is confirmed.
+
+    This is the window a live Razorpay flow actually has: the order exists and the money is
+    authorised, and the capture webhook arrives in a later request. A revocation landing in that
+    window must be compensated rather than settled.
+    """
+    from app.checkout import complete as complete_module
+    from app.db.models import Payment
+
+    original = complete_module._authorize
+    complete_module._authorize = lambda *_a, **_k: None
+    try:
+        outcome = complete(
+            session,
+            presentation.credentials,
+            correlation_id=correlation,
+            gateway=gateway,
+            semantic_client=KeywordSemanticClient(),
+            whatsapp=RecordingTransport(),
+        )
+    finally:
+        complete_module._authorize = original
+
+    if outcome.status != "awaiting_payment" or outcome.payment_id is None:
+        return outcome
+
+    awaiting = session.get(CheckoutSession, outcome.checkout_id)
+    revocation.revoke(session, awaiting.mandate_id, "revoked by the corpus")
+    session.flush()
+    payment = session.get(Payment, outcome.payment_id)
+    payment.razorpay_payment_id = f"pay_{correlation}"
+    payment.status = PaymentStatus.CAPTURED
+    payment.captured_at = utcnow()
+    session.flush()
+    complete_module.finalise_captured(session, payment, gateway=gateway)
+    session.flush()
+
+    row = session.get(CheckoutSession, outcome.checkout_id)
+    if row is None:
+        return outcome
+    # The settling call carries its own reason: the mandate died between authorisation and capture.
+    return replace(outcome, status=row.state, reason_code=ReasonCode.MANDATE_REVOKED)
 
 
 def _revoke_mandate(session: Session, presentation: factory.Presentation) -> None:

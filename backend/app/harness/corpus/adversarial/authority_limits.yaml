@@ -134,6 +134,36 @@ scenarios:
     expect_reason_codes:
       - MANDATE_REVOKED
 
+  - id: revocation-during-capture
+    description: >
+      The human revokes after the order is authorised but before capture is confirmed. This is the
+      window a live Razorpay flow actually has, because the capture webhook arrives in a later
+      request. The capture must be compensated by a refund rather than settled.
+    cart:
+      - sku: DWP-TEA-001
+        title: Nilgiri Black Tea 250g
+        quantity: 1
+    setup:
+      revoke_between_authorisation_and_capture: true
+    expect_blocked: true
+    expect_reason_codes:
+      - MANDATE_REVOKED
+
+  - id: revocation-after-capture
+    description: >
+      The human revokes once the purchase has already settled. The completed transaction stands,
+      but the mandate is dead: the next use of it must be refused rather than honoured.
+    cart:
+      - sku: DWP-TEA-001
+        title: Nilgiri Black Tea 250g
+        quantity: 1
+    setup:
+      revoke_after_capture: true
+      repeat_attempts: 2
+    expect_blocked: true
+    expect_reason_codes:
+      - MANDATE_REVOKED
+
   - id: quantity-above-the-item-maximum
     description: The cart asks for more units than the item's published maximum order quantity.
     cart:

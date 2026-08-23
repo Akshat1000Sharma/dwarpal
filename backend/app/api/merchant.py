@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
+from app.api.deps import get_db, require_merchant_token
 from app.db.base import utcnow
 from app.db.models import (
     AgentIdentity,
@@ -39,7 +39,11 @@ from app.kernel import revocation
 from app.kernel.reasons import ACTIONS, ReasonCode
 from app.settings import settings
 
-router = APIRouter(prefix="/merchant", tags=["merchant"])
+router = APIRouter(
+    prefix="/merchant",
+    tags=["merchant"],
+    dependencies=[Depends(require_merchant_token)],
+)
 
 
 def _amount(minor: int, currency: str = "INR") -> dict[str, Any]:
@@ -342,7 +346,7 @@ def evidence_index(
 ) -> dict[str, Any]:
     packets = locker.recent(db, limit=limit, offset=offset)
     return {
-        "chain": locker.verify_chain(db),
+        "chain": locker.verify_chain(db, seqs={p.seq for p in packets}),
         "packets": [
             {
                 "seq": p.seq,
@@ -364,13 +368,11 @@ def evidence_detail(
     packets = locker.for_correlation(db, correlation_id)
     if not packets:
         raise HTTPException(status_code=404, detail="no evidence for that correlation id")
-    chain = locker.verify_chain(db)
+    chain = locker.verify_chain(db, seqs={p.seq for p in packets})
     return {
         "correlation_id": correlation_id,
         "chain_valid": chain["valid"],
-        "chain_problems": [
-            p for p in chain["problems"] if p.get("seq") in {x.seq for x in packets}
-        ],
+        "chain_problems": chain["problems"],
         "packets": [
             {
                 "seq": p.seq,

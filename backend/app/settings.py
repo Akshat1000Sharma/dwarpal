@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     META_TEMPLATE_NAME: str = ""
     META_TEMPLATE_LANGUAGE: str = "en"
     ESCALATION_HUMAN_WHATSAPP: str = ""
+    # Guards the whole merchant control plane. Empty refuses every merchant request rather
+    # than serving it open, because the documented runbook tunnels this port publicly.
+    MERCHANT_API_TOKEN: str = ""
     ESCALATION_DEADLINE_SECONDS: int = 900
 
     MERCHANT_KEY_ID: str = "dwarpal-merchant-01"

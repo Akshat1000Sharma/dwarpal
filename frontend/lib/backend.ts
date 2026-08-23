@@ -29,6 +29,12 @@ export function backendOrigin(): string {
   return origin.replace(/\/$/, "");
 }
 
+/** The merchant surface is guarded by a shared secret; the dashboard is the only caller. */
+export function merchantToken(): Record<string, string> {
+  const token = process.env.MERCHANT_API_TOKEN;
+  return token ? { "X-Merchant-Token": token } : {};
+}
+
 type RequestOptions = {
   method?: string;
   body?: unknown;
@@ -43,6 +49,7 @@ export async function backendFetch<T>(path: string, options: RequestOptions = {}
     method,
     headers: {
       Accept: "application/json",
+      ...merchantToken(),
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),

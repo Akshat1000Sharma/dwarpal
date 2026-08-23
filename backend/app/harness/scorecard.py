@@ -32,6 +32,20 @@ def _pct(value: float) -> str:
     return f"{value * 100:.1f}%"
 
 
+# Specification section 12 lists one family the corpus cannot host. The corpus runs inside a single
+# transaction that is rolled back, so a genuine concurrent draw, which needs several committed
+# sessions racing each other, would have to leak writes past that rollback. It is enforced by a
+# dedicated fuzz test instead, and is named here so the headline number is not read as covering it.
+ENFORCED_ELSEWHERE = [
+    "",
+    "## Enforced outside this corpus",
+    "",
+    "- Concurrent draw against a single mandate cap, in `tests/test_concurrency.py`. That suite "
+    "races many committed sessions against one cap and includes a naive check-then-write control "
+    "that demonstrably breaches it, which a single-transaction corpus cannot reproduce.",
+]
+
+
 def render_attack_markdown(report: dict[str, Any]) -> str:
     adversarial = report["adversarial"]
     benign = report["benign"]
@@ -63,6 +77,7 @@ def render_attack_markdown(report: dict[str, Any]) -> str:
         "",
     ]
     lines.extend(f"- {family}" for family in report["families"])
+    lines.extend(ENFORCED_ELSEWHERE)
     lines.extend(["", "## Misses", ""])
     if report["misses"]:
         lines.append("| Scenario | Family | Expected | Observed |")

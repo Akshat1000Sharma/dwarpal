@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 
-import { backendOrigin } from "@/lib/backend";
+import { backendOrigin, merchantToken } from "@/lib/backend";
 
 /**
  * Same-origin proxy to the backend.
@@ -14,13 +14,28 @@ import { backendOrigin } from "@/lib/backend";
 
 const ALLOWED_PREFIXES = ["merchant/", "health"];
 
-function permitted(path: string): boolean {
-  return ALLOWED_PREFIXES.some((prefix) => path === prefix || path.startsWith(prefix));
+function permitted(path: string[]): boolean {
+  // A prefix test alone is not enough. A segment that decodes to a slash or to a dot segment is
+  // resolved away by the URL parser after this check, which would carry "merchant/..%2fcatalog"
+  // straight through to an agent endpoint, so those segments are refused before the join.
+  for (const segment of path) {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      return false;
+    }
+    if (decoded === "." || decoded === ".." || decoded.includes("/") || decoded.includes("\\")) {
+      return false;
+    }
+  }
+  const joined = path.join("/");
+  return ALLOWED_PREFIXES.some((prefix) => joined === prefix || joined.startsWith(prefix));
 }
 
 async function forward(request: NextRequest, path: string[]): Promise<Response> {
   const joined = path.join("/");
-  if (!permitted(joined)) {
+  if (!permitted(path)) {
     return Response.json(
       { error: "only the merchant surface is proxied through the dashboard origin" },
       { status: 404 },
@@ -35,6 +50,7 @@ async function forward(request: NextRequest, path: string[]): Promise<Response> 
       method: request.method,
       headers: {
         Accept: "application/json",
+        ...merchantToken(),
         ...(body ? { "Content-Type": "application/json" } : {}),
       },
       body,
