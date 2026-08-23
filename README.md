@@ -139,6 +139,63 @@ catalog, the policy terms and the quote endpoint in the shape that agent expects
 not been run against each other in this repository, and the matrix says so rather than implying
 otherwise.
 
+## Verified against the live services
+
+The automated suite stubs Razorpay, Gemini and Meta, as it must. Separately, these paths were
+exercised against the real services in test mode, and the results are recorded here rather than
+implied.
+
+### Razorpay, fully verified
+
+A real card payment was driven through Razorpay test-mode Checkout against an order Dwarpal
+created, and the whole loop closed:
+
+| Step | Evidence |
+|---|---|
+| Order created by Dwarpal | `order_TT6Kw1Rn1YtU43`, notes round-tripped |
+| Card authorised | `pay_TT6Q2UcBMTAePY`, status `authorized` |
+| `payment.authorized` webhook | delivered by `Razorpay-Webhook/v1`, signature verified, HTTP 200 |
+| Capture by Dwarpal's own code | real API call, payment moved to `captured` |
+| `payment.captured` webhook | delivered and verified; it finalised the Dwarpal checkout |
+| Checkout settled | budget committed, spend recorded, stock consumed, state `completed` |
+| Full compensating refund | `rfnd_TT6Ty0N8V9AH14` for the full amount, payment `refunded` |
+| `refund.created` / `refund.processed` | delivered and verified |
+
+Nine webhooks arrived from Razorpay across the run. Every one carried a genuine
+`X-Razorpay-Signature` that the HMAC check accepted, and every one answered HTTP 200. Unsigned and
+mis-signed bodies were refused 401 before parsing. The five event types Razorpay actually emitted
+were `payment.authorized`, `payment.captured`, `order.paid`, `refund.created` and
+`refund.processed`; the two configured failure events did not occur because nothing failed.
+
+The evidence packet for that transaction records `finalised_by: razorpay payment.captured
+webhook`, and the offline verifier validates the whole chain including it.
+
+### WhatsApp, partially verified
+
+| Path | State |
+|---|---|
+| Webhook verification handshake | verified. Meta's `facebookplatform/1.0` GET was answered 200 |
+| App id and app secret | verified by exchanging them for an app access token |
+| Access token and phone number id | verified against the Graph API |
+| Outbound escalation | verified. Real messages delivered, message ids returned, no delivery error |
+| Inbound button reply | **not working, and it is a Meta account configuration problem** |
+
+Meta accepts sends but never calls the webhook back: two sends produced zero inbound requests,
+including no delivery-status callbacks. The app subscription is correct and lists the `messages`
+field, and the phone number carries the right `webhook_configuration`. The cause is that the
+System User has no WhatsApp Business Account assigned to it
+(`assigned_whatsapp_business_accounts` returns an empty list) and its token does not hold
+`business_management`, so the app cannot be subscribed to the WABA over the API.
+
+Until that is fixed in Business Settings, by assigning the WABA to the System User and subscribing
+the app to it, an approve or deny tapped in WhatsApp will not reach Dwarpal. The escalation still
+behaves correctly in that state: it stays pending and becomes a denial at its deadline, because
+the timeout fails closed.
+
+The inbound handler itself is verified against correctly signed payloads: a signed button reply
+settles the escalation, a duplicate is recorded and ignored, and unsigned, mis-signed or
+post-signature-tampered bodies are refused 401 before parsing.
+
 ## Repository layout
 
 ```
