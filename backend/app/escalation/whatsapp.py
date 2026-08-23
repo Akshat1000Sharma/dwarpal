@@ -138,6 +138,17 @@ class RecordingTransport:
         return {"messages": [{"id": f"wamid.recorded.{len(self.sent)}"}]}
 
 
+def default_transport() -> WhatsAppTransport:
+    """The sender used when a caller does not supply one.
+
+    Real delivery in normal operation, and a recording stub under APP_ENV=testing so the suite
+    never needs Meta credentials and never makes a network call.
+    """
+    if settings.APP_ENV == "testing":
+        return RecordingTransport()
+    return CloudApiTransport()
+
+
 def build_approval_message(
     *,
     to_number: str,

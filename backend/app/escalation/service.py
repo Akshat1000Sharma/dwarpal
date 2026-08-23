@@ -22,9 +22,9 @@ from app.ap2.jose import hash_payload
 from app.db.base import utcnow
 from app.db.models import Escalation, EscalationResponse, EscalationStatus
 from app.escalation.whatsapp import (
-    RecordingTransport,
     WhatsAppTransport,
     build_approval_message,
+    default_transport,
 )
 from app.logging import get_logger
 from app.settings import settings
@@ -91,7 +91,7 @@ def raise_escalation(
     session.add(escalation)
     session.flush()
 
-    sender = transport or RecordingTransport()
+    sender = transport or default_transport()
     recipient = settings.ESCALATION_HUMAN_WHATSAPP
     if not recipient:
         escalation.delivery_error = "ESCALATION_HUMAN_WHATSAPP is not configured"
