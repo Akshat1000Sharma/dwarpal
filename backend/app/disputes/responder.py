@@ -281,9 +281,22 @@ def _narrative(body: dict[str, Any], factors: list[EvidenceFactor]) -> list[str]
     return lines
 
 
+def _score(factors: list[EvidenceFactor]) -> int:
+    """Percentage of the evidence that was achievable for this transaction and was actually there.
+
+    Normalised rather than summed, because the achievable total varies: the human-confirmation
+    factor only carries weight when an escalation was raised. A raw sum would put the score above
+    the hundred-point scale the threshold and the representment are both stated on.
+    """
+    achievable = sum(f.weight for f in factors)
+    if achievable <= 0:
+        return 0
+    return round(100 * sum(f.weight for f in factors if f.present) / achievable)
+
+
 def build_representment(body: dict[str, Any], *, correlation_id: str) -> Representment:
     factors = _factors(body)
-    score = sum(f.weight for f in factors if f.present)
+    score = _score(factors)
     weaknesses = _weaknesses(body, factors)
 
     # Compensated transactions are never contested: the merchant has already given the money back.
@@ -310,6 +323,29 @@ def build_representment(body: dict[str, Any], *, correlation_id: str) -> Represe
     )
 
 
+# Claims proved once at verification time and not restated by later packets in the same chain.
+_INHERITED_CLAIMS = ("credential_chain", "verification", "checkout", "semantic")
+
+
+def _consolidated(bodies: list[dict[str, Any]]) -> dict[str, Any]:
+    """Read the whole chain for one transaction, not just its last link.
+
+    The settled outcome is the last packet, but authority is proved in the packet written when the
+    credentials were verified, which for any webhook-driven settlement is an earlier one. Defending
+    on the last packet alone discards evidence that was recorded correctly. Packets are append-only,
+    so consolidating at read time is also what makes already-written chains defensible.
+    """
+    body = dict(bodies[-1])
+    for claim in _INHERITED_CLAIMS:
+        if body.get(claim):
+            continue
+        for earlier in reversed(bodies[:-1]):
+            if earlier.get(claim):
+                body[claim] = earlier[claim]
+                break
+    return body
+
+
 def respond(session: Session, *, correlation_id: str, claim: str) -> Dispute:
     """Assemble a representment from stored evidence and record the recommendation."""
     packets = locker.for_correlation(session, correlation_id)
@@ -321,8 +357,9 @@ def respond(session: Session, *, correlation_id: str, claim: str) -> Dispute:
             weaknesses=["no evidence packet exists for this transaction"],
         )
     else:
-        # The last packet carries the settled outcome for the transaction.
-        representment = build_representment(packets[-1].body, correlation_id=correlation_id)
+        representment = build_representment(
+            _consolidated([p.body for p in packets]), correlation_id=correlation_id
+        )
         representment.packet_ids = [p.packet_id for p in packets]
 
     row = Dispute(

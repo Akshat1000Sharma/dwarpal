@@ -837,6 +837,40 @@ def finalise_captured(
     return locker.append(session, correlation_id=payment.correlation_id, body=body).packet_id
 
 
+def finalise_failed(
+    session: Session, payment: Any, *, error: dict[str, Any] | None = None
+) -> str | None:
+    """Unwind a checkout whose payment the gateway has reported as failed.
+
+    The reservation TTL would eventually free the budget, but that fallback exists for states
+    Dwarpal cannot observe. Here the gateway has said the payment is dead, so holding the human's
+    budget and the last unit of stock against it is a decision, and the wrong one.
+    """
+    row = session.get(CheckoutSession, payment.checkout_id)
+    if row is None or row.state not in (CheckoutState.AWAITING_PAYMENT, CheckoutState.COMPLETING):
+        return None
+
+    budget.release_by_correlation(session, payment.correlation_id)
+    inventory.release(session, row.id)
+    row.state = CheckoutState.CANCELLED
+    session.flush()
+
+    body = packet.build(
+        session,
+        correlation_id=payment.correlation_id,
+        outcome="payment_failed",
+        agent_id=payment.agent_id,
+        credentials=None,
+        verification=None,
+        checkout_row=row,
+        extra={
+            "finalised_by": "razorpay payment.failed webhook",
+            "gateway_error": error or {},
+        },
+    )
+    return locker.append(session, correlation_id=payment.correlation_id, body=body).packet_id
+
+
 def _authorize(gateway: PaymentGateway | None, payment: Any) -> dict[str, Any] | None:
     """Ask the mocked Credential Provider to pay the order in test mode.
 

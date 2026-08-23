@@ -20,7 +20,7 @@ from app.checkout.complete import complete
 from app.checkout.quote import QuoteError, RequestedLine, create_quote, quote_document
 from app.correlation import get_correlation_id
 from app.errors import AgentError
-from app.kernel.reasons import ReasonCode
+from app.kernel.reasons import ReasonCode, action_for, is_retryable
 from app.keys import merchant_jwks
 from app.semantic.client import get_client
 from app.settings import settings
@@ -212,6 +212,11 @@ def post_complete(
     document: dict[str, Any] = {
         "status": outcome.status,
         "reason_code": outcome.reason_code.value,
+        # A policy refusal is returned rather than raised, so the machine-actionable guidance every
+        # other refusal carries has to be derived here too. This is the path where money is at
+        # stake, so it is the last one that should make an agent parse prose.
+        "action": action_for(outcome.reason_code).value,
+        "retryable": is_retryable(outcome.reason_code),
         "checkout_id": outcome.checkout_id,
         "correlation_id": get_correlation_id(),
         "evidence_packet_id": outcome.evidence_packet_id,

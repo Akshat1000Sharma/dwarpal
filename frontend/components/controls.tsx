@@ -136,7 +136,7 @@ export function AgentLimits({
     <div className="min-w-[240px]">
       <div className="flex flex-wrap items-center gap-2">
         <label className="text-xs text-muted">
-          Spend
+          Spend INR
           <input
             value={spend}
             onChange={(event) => setSpend(event.target.value)}

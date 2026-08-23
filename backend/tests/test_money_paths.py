@@ -510,6 +510,87 @@ def test_the_capture_webhook_finalises_the_checkout(seeded, gateway):
     assert packets[-1].body["extra"]["finalised_by"].endswith("webhook")
 
 
+def test_a_failed_payment_releases_the_budget_and_the_stock(seeded, gateway):
+    """A gateway-confirmed failure must unwind, not wait for the reservation TTL.
+
+    The TTL exists for states Dwarpal cannot observe. Once Razorpay has said the payment is dead,
+    continuing to hold the human's budget and the last unit of stock against it is a decision, and
+    the wrong one: the agent's remaining authority is silently reduced and the stock is unsellable.
+    """
+    from app.checkout.complete import finalise_failed
+    from app.db.models import BudgetReservation, CheckoutSession, ReservationStatus
+    from app.evidence import locker
+
+    db = seeded
+    outcome = _awaiting(db, gateway, "dwc_payment_failed")
+    payment = db.get(Payment, outcome.payment_id)
+
+    reserved = db.scalars(
+        select(BudgetReservation).where(
+            BudgetReservation.correlation_id == "dwc_payment_failed",
+            BudgetReservation.status == ReservationStatus.RESERVED,
+        )
+    ).all()
+    assert reserved, "the awaiting-payment path should hold a reservation"
+
+    payment.status = PaymentStatus.FAILED
+    db.flush()
+    packet_id = finalise_failed(
+        db, payment, error={"error_code": "BAD_REQUEST_ERROR", "error_reason": "payment_timeout"}
+    )
+    assert packet_id
+
+    still_held = db.scalars(
+        select(BudgetReservation).where(
+            BudgetReservation.correlation_id == "dwc_payment_failed",
+            BudgetReservation.status == ReservationStatus.RESERVED,
+        )
+    ).all()
+    assert not still_held, "a failed payment must not keep the human's budget reserved"
+
+    row = db.get(CheckoutSession, outcome.checkout_id)
+    assert row.state == CheckoutState.CANCELLED
+
+    body = locker.for_correlation(db, "dwc_payment_failed")[-1].body
+    assert body["outcome"] == "payment_failed"
+    assert body["extra"]["gateway_error"]["error_reason"] == "payment_timeout"
+
+    # A replayed webhook must not unwind twice.
+    assert finalise_failed(db, payment) is None
+
+
+def test_a_webhook_settled_checkout_is_still_defensible(seeded, gateway):
+    """The closing packet must carry the authority proved in the request that opened the checkout.
+
+    A real Razorpay flow always settles in a later request than the one that verified the
+    credentials. A dispute reads the closing packet, so if the chain were not carried forward
+    every live transaction would look unauthorised and be recommended for refund.
+    """
+    from app.checkout.complete import finalise_captured
+    from app.db.base import utcnow
+    from app.disputes import responder
+    from app.evidence import locker
+
+    db = seeded
+    outcome = _awaiting(db, gateway, "dwc_webhook_defence")
+    payment = db.get(Payment, outcome.payment_id)
+    payment.razorpay_payment_id = "pay_webhook_2"
+    payment.status = PaymentStatus.CAPTURED
+    payment.captured_at = utcnow()
+    db.flush()
+    finalise_captured(db, payment)
+
+    closing = locker.for_correlation(db, "dwc_webhook_defence")[-1].body
+    assert closing["credential_chain"], "closing packet lost the credential chain"
+    assert closing["verification"]["steps_passed"], "closing packet lost the verification record"
+
+    dispute = responder.respond(
+        db, correlation_id="dwc_webhook_defence", claim="the agent was never authorised"
+    )
+    assert dispute.recommendation == responder.Recommendation.CONTEST.value
+    assert dispute.strength_score >= responder.CONTEST_THRESHOLD
+
+
 def test_a_revocation_before_the_capture_webhook_compensates(seeded, gateway):
     """The webhook is where the money moves in a live run, so revocation is re-read there."""
     from app.checkout.complete import _upsert_open_mandate, finalise_captured

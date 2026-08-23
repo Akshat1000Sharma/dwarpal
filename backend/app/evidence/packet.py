@@ -21,6 +21,7 @@ from app.db.base import utcnow
 from app.db.models import (
     CheckoutSession,
     Escalation,
+    EvidencePacket,
     Payment,
     Refund,
 )
@@ -70,6 +71,28 @@ class TimingRecorder:
         return [s.as_dict() for s in self.steps]
 
 
+def _carried_forward(session: Session, correlation_id: str, claim: str) -> dict[str, Any]:
+    """Recover a claim recorded by an earlier packet under the same correlation id.
+
+    A checkout finalised by webhook is settled in a later request than the one that verified the
+    credentials, so the settling call has no chain of its own to record. Without this the closing
+    packet would be the only one a dispute reads and would show no authority at all.
+    """
+    for row in reversed(
+        list(
+            session.scalars(
+                select(EvidencePacket)
+                .where(EvidencePacket.correlation_id == correlation_id)
+                .order_by(EvidencePacket.seq)
+            ).all()
+        )
+    ):
+        value = (row.body or {}).get(claim)
+        if value:
+            return value
+    return {}
+
+
 def build(
     session: Session,
     *,
@@ -84,6 +107,8 @@ def build(
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Collect everything recorded under this correlation id into one immutable body."""
+    credentials = credentials or _carried_forward(session, correlation_id, "credential_chain")
+    verification = verification or _carried_forward(session, correlation_id, "verification")
     verdict_rows = list(
         session.scalars(
             select(VerdictRow)

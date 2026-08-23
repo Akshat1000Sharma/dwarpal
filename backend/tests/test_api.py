@@ -9,6 +9,7 @@ from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select, update
 
 from app.harness import factory
 from app.kernel.reasons import ACTIONS, ReasonCode
@@ -147,6 +148,67 @@ def test_quote_then_complete_over_http(client, seeded):
     assert_conforms("checkout_receipt", body["receipt"])
 
 
+def test_a_policy_refusal_tells_the_agent_what_to_do_next(client, seeded):
+    """A refusal returned rather than raised must still be machine-actionable.
+
+    Every AgentError carries an action and a retryable flag. A kernel refusal takes a different
+    route out of the application, and this is the route where money is at stake, so it is the last
+    one that should force an agent to parse prose.
+    """
+    from app.db.models import AgentIdentity
+
+    agent = "agent:refusal-envelope"
+    cart = [("DWP-HDP-007", "Wireless Headphones", 1)]
+    principals = factory.Principals.create(agent_id=agent)
+
+    def attempt(nonce: str):
+        quoted = client.post(
+            "/checkout/quote",
+            json={"items": [{"sku": "DWP-HDP-007", "quantity": 1}]},
+            headers={"X-Agent-Id": agent},
+        ).json()
+        credentials = factory.present(
+            principals,
+            factory.spec_for_cart(cart),
+            checkout_jwt=quoted["checkout_jwt"],
+            checkout_hash=quoted["checkout_hash"],
+            amount_minor=quoted["total"]["amount"],
+            audience=settings.PUBLIC_BASE_URL,
+            nonce=nonce,
+        ).credentials
+        return client.post(
+            "/checkout/complete",
+            json={
+                "open_checkout_mandate": credentials.open_checkout,
+                "closed_checkout_mandate": credentials.closed_checkout,
+                "open_payment_mandate": credentials.open_payment,
+                "closed_payment_mandate": credentials.closed_payment,
+                "nonce": credentials.nonce,
+            },
+            headers={"X-Agent-Id": agent},
+        )
+
+    # The agent identity the gate attaches to is created by its first completion.
+    allowed = attempt("refusal-envelope-1")
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["action"] == ACTIONS[ReasonCode.APPROVED].value
+
+    seeded.execute(
+        update(AgentIdentity)
+        .where(AgentIdentity.agent_id == agent)
+        .values(blocked_categories=["electronics"])
+    )
+    seeded.flush()
+
+    refusal = attempt("refusal-envelope-2")
+    assert refusal.status_code == 403, refusal.text
+    body = refusal.json()
+    assert body["reason_code"] == ReasonCode.CATEGORY_FORBIDDEN.value
+    assert body["action"] == ACTIONS[ReasonCode.CATEGORY_FORBIDDEN].value
+    assert body["action"] == "reduce_cart"
+    assert body["retryable"] is False
+
+
 def test_quote_for_an_unknown_sku_is_machine_actionable(client):
     response = client.post("/checkout/quote", json={"items": [{"sku": "NOPE", "quantity": 1}]})
     assert response.status_code == 404
@@ -230,6 +292,69 @@ def test_razorpay_signature_covers_the_exact_bytes(client):
         "/webhooks/razorpay", content=tampered, headers={"X-Razorpay-Signature": signature}
     )
     assert response.status_code == 401
+
+
+def test_a_refund_that_fails_after_creation_is_filed_as_a_discrepancy(client, seeded):
+    """A compensating refund can succeed at creation and fail later, asynchronously.
+
+    The checkout then claims it was compensated while the buyer never got the money back. Razorpay
+    is authoritative, so the disagreement is recorded rather than silently corrected.
+    """
+    from app.db.models import PaymentException, Refund, RefundStatus
+
+    refund = Refund(
+        payment_id="pay_local_ref",
+        correlation_id="dwc_refund_failed",
+        razorpay_refund_id="rfnd_failed_later",
+        amount_minor=45000,
+        reason="revocation_after_capture",
+        status=RefundStatus.CREATED,
+        compensating=True,
+    )
+    seeded.add(refund)
+    seeded.flush()
+
+    body = json.dumps(
+        {
+            "entity": "event",
+            "event": "refund.failed",
+            "contains": ["refund"],
+            "payload": {
+                "refund": {
+                    "entity": {
+                        "id": "rfnd_failed_later",
+                        "entity": "refund",
+                        "amount": 45000,
+                        "status": "failed",
+                    }
+                }
+            },
+        },
+        separators=(",", ":"),
+    ).encode()
+    signature = hmac.new(
+        settings.RAZORPAY_WEBHOOK_SECRET.encode(), body, hashlib.sha256
+    ).hexdigest()
+    response = client.post(
+        "/webhooks/razorpay",
+        content=body,
+        headers={"Content-Type": "application/json", "X-Razorpay-Signature": signature},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["handled"] == ["refund.failed"]
+
+    assert refund.status == RefundStatus.FAILED
+
+    filed = seeded.scalars(
+        select(PaymentException).where(
+            PaymentException.correlation_id == "dwc_refund_failed",
+            PaymentException.kind == "refund_failed_after_creation",
+        )
+    ).all()
+    assert filed, "a refund that failed after creation must leave an actionable record"
+    assert filed[0].local_state["compensating"] is True
+    assert filed[0].resolved is False
 
 
 def test_whatsapp_subscription_handshake(client):

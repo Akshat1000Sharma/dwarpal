@@ -14,9 +14,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.checkout.complete import finalise_captured
+from app.checkout.complete import finalise_captured, finalise_failed
 from app.db.base import utcnow
-from app.db.models import Payment, PaymentStatus, Refund, RefundStatus
+from app.db.models import Payment, PaymentException, PaymentStatus, Refund, RefundStatus
 from app.errors import AgentError
 from app.escalation import service as escalation_service
 from app.escalation import whatsapp
@@ -26,6 +26,12 @@ from app.payments.gateway import verify_webhook_signature
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["webhooks"])
+
+
+def _gateway_error(entity: dict[str, Any]) -> dict[str, Any]:
+    """The failure fields Razorpay sets on a failed payment, for the evidence packet."""
+    fields = ("error_code", "error_description", "error_source", "error_step", "error_reason")
+    return {key: entity[key] for key in fields if entity.get(key)}
 
 
 @router.post("/webhooks/razorpay")
@@ -79,6 +85,12 @@ async def razorpay_webhook(
                     row.status = PaymentStatus.AUTHORIZED
             elif event == "payment.failed":
                 row.status = PaymentStatus.FAILED
+                packet_id = finalise_failed(db, row, error=_gateway_error(payment_entity))
+                if packet_id:
+                    logger.info(
+                        "checkout cancelled after a failed payment",
+                        extra={"context": {"evidence_packet_id": packet_id}},
+                    )
             handled.append(event)
 
     if refund_entity:
@@ -91,6 +103,22 @@ async def razorpay_webhook(
                 row.status = RefundStatus.PROCESSED
             elif event == "refund.failed":
                 row.status = RefundStatus.FAILED
+                # A compensating refund that fails after the fact leaves the checkout claiming it
+                # was compensated while the buyer never got the money back. That disagreement is
+                # filed, never silently corrected.
+                db.add(
+                    PaymentException(
+                        correlation_id=row.correlation_id,
+                        payment_id=row.payment_id,
+                        kind="refund_failed_after_creation",
+                        local_state={
+                            "refund_id": row.id,
+                            "amount_minor": row.amount_minor,
+                            "compensating": row.compensating,
+                        },
+                        gateway_state=refund_entity,
+                    )
+                )
             handled.append(event)
 
     logger.info(
