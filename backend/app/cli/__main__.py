@@ -39,14 +39,32 @@ def _reports_engine(database: str):
     return create_engine(url, pool_pre_ping=True, future=True)
 
 
-def _fresh_session(database: str):
+def _bind(database: str):
+    """Point this process at the named database, leaving its contents alone."""
     from app.db import base as db_base
-    from app.db.bootstrap import create_schema
 
     engine = _reports_engine(database)
     db_base.engine.dispose()
     db_base.engine = engine
     db_base.SessionFactory.configure(bind=engine)
+    return engine
+
+
+def _report_database(args: argparse.Namespace, suffix: str) -> str:
+    """Each report gets its own database.
+
+    They ran into one before, and every run starts by truncating, so generating both reports left
+    only the second one's evidence chain behind. Keeping them apart means each chain survives its
+    run and can be exported and verified.
+    """
+    base = args.database or settings.DB_NAME
+    return f"{base}_{suffix}"
+
+
+def _fresh_session(database: str):
+    from app.db.bootstrap import create_schema
+
+    engine = _bind(database)
     create_schema(engine)
 
     tables = [
@@ -65,7 +83,7 @@ def cmd_scorecard(args: argparse.Namespace) -> int:
     from app.harness.runner import run_corpus
     from app.harness.scorecard import write_attack_scorecard
 
-    session = _fresh_session(args.database)
+    session = _fresh_session(_report_database(args, "reports"))
     try:
         report = run_corpus(session)
         session.commit()
@@ -92,7 +110,7 @@ def cmd_disputes(args: argparse.Namespace) -> int:
     from app.harness.disputes import run_batch
     from app.harness.scorecard import write_dispute_report
 
-    session = _fresh_session(args.database)
+    session = _fresh_session(_report_database(args, "disputes"))
     try:
         document = run_batch(session)
         session.commit()
@@ -121,6 +139,10 @@ def cmd_export_evidence(args: argparse.Namespace) -> int:
     from app.db.base import session_scope
     from app.evidence.locker import export_rows
 
+    # Without --database this reads the live chain. The reports run writes its packets to a
+    # separate database, so exporting those means naming it.
+    if args.database:
+        _bind(args.database)
     with session_scope() as session:
         rows = export_rows(session)
     destination = Path(args.out)
@@ -142,10 +164,12 @@ def cmd_export_jwks(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_verify_chain(_: argparse.Namespace) -> int:
+def cmd_verify_chain(args: argparse.Namespace) -> int:
     from app.db.base import session_scope
     from app.evidence.locker import verify_chain
 
+    if args.database:
+        _bind(args.database)
     with session_scope() as session:
         report = verify_chain(session)
     print(json.dumps(report, indent=2))
@@ -169,8 +193,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli", description="Dwarpal utilities.")
     parser.add_argument(
         "--database",
-        default=f"{settings.DB_NAME}_reports",
-        help="database used for report generation, created if absent",
+        default=None,
+        help=(
+            "database to act on, created if absent. Report generation defaults to "
+            "<DB_NAME>_reports; export-evidence and verify-chain default to the live database."
+        ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

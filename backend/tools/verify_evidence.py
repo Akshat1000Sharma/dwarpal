@@ -211,6 +211,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--jwks", help="path to the merchant public JWK Set")
     parser.add_argument("--pem", help="path to the merchant key in PEM form")
     parser.add_argument("--json", action="store_true", help="emit the report as JSON")
+    parser.add_argument(
+        "--min-packets",
+        type=int,
+        default=1,
+        help=(
+            "fail if fewer than this many packets were read. An empty chain is vacuously valid, "
+            "so without a floor a verifier pointed at the wrong store reports success while "
+            "checking nothing. Pass 0 to allow an empty chain."
+        ),
+    )
     args = parser.parse_args(argv)
 
     rows = rows_from_jsonl(args.jsonl) if args.jsonl else rows_from_dsn(args.dsn)
@@ -225,6 +235,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"chain valid         : {report['valid']}")
         for problem in report["problems"]:
             print(f"  seq {problem['seq']}: {problem['problem']}")
+    if report["packets"] < args.min_packets:
+        print(
+            f"too few packets: read {report['packets']}, expected at least {args.min_packets}",
+            file=sys.stderr,
+        )
+        return 1
     return 0 if report["valid"] else 1
 
 

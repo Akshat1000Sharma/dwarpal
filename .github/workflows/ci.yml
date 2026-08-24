@@ -83,13 +83,20 @@ jobs:
       - name: Generate the attack scorecard and dispute defence reports
         run: python -m app.cli reports
 
+      # The reports step commits its packets to a separate database, so the export names it.
+      # --min-packets makes an empty chain a failure: verifying nothing is not a pass.
+      # The reports step commits its packets to a separate database, so the export names it.
+      # --min-packets makes an empty chain a failure: verifying nothing is not a pass.
       - name: Verify the evidence chain with the application stopped
         run: |
-          python -m app.cli export-evidence --out reports/evidence.jsonl
+          python -m app.cli --database "${DB_NAME}_reports" \
+            export-evidence --out reports/evidence.jsonl
           python -m app.cli export-jwks --out reports/merchant_jwks.json
           python tools/verify_evidence.py \
             --jsonl reports/evidence.jsonl \
-            --jwks reports/merchant_jwks.json
+            --jwks reports/merchant_jwks.json \
+            --min-packets 40
+            --min-packets 40
 
       - name: Upload conformance and scorecard reports
         if: always()

@@ -386,4 +386,17 @@ python tools/verify_evidence.py --jsonl reports/evidence.jsonl --jwks reports/me
 ```
 
 It can also read the database directly with `--dsn`. Exit status is 0 only when every hash link
-and every signature checks out.
+and every signature checks out, and when at least `--min-packets` packets were read. That floor
+defaults to 1, because an empty chain satisfies every link vacuously: without it a verifier pointed
+at the wrong database reports success while checking nothing. Pass `--min-packets 0` to accept an
+empty chain deliberately.
+
+`export-evidence` reads the live database. The two report runs write to their own databases so
+neither truncates the other's chain, so exporting the corpus chain means naming it:
+
+```bash
+python -m app.cli --database "${DB_NAME}_reports" export-evidence --out reports/evidence.jsonl
+```
+
+This is what CI does, so the offline check there runs against a real chain of about fifty packets
+rather than an empty one.

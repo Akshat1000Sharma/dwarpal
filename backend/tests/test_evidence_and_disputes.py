@@ -208,6 +208,47 @@ def test_standalone_verifier_detects_a_forged_signature(seeded, gateway, tmp_pat
     assert "signature_invalid" in problems
 
 
+def test_an_empty_chain_is_not_reported_as_verified(seeded, gateway, tmp_path):
+    """Verifying nothing must not exit zero.
+
+    An empty chain satisfies every hash link vacuously, so a verifier pointed at the wrong store
+    reports success while checking nothing. CI did exactly that until the floor was added.
+    """
+    empty = tmp_path / "empty.jsonl"
+    empty.write_text("", encoding="utf-8")
+    jwks = tmp_path / "jwks.json"
+    jwks.write_text(json.dumps(merchant_jwks()), encoding="utf-8")
+
+    refused = subprocess.run(
+        [sys.executable, str(VERIFIER), "--jsonl", str(empty), "--jwks", str(jwks), "--json"],
+        capture_output=True,
+        text=True,
+        cwd=str(BACKEND_ROOT),
+        check=False,
+    )
+    assert refused.returncode == 1, refused.stdout + refused.stderr
+
+    # The floor is a guard, not a law: an empty chain can still be accepted deliberately.
+    allowed = subprocess.run(
+        [
+            sys.executable,
+            str(VERIFIER),
+            "--jsonl",
+            str(empty),
+            "--jwks",
+            str(jwks),
+            "--min-packets",
+            "0",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(BACKEND_ROOT),
+        check=False,
+    )
+    assert allowed.returncode == 0, allowed.stdout + allowed.stderr
+
+
 def test_the_verifier_imports_nothing_from_the_application() -> None:
     """If it needed the running application to pass, it would prove nothing."""
     source = VERIFIER.read_text(encoding="utf-8")
