@@ -70,6 +70,135 @@ goes to the human rather than through.
 | Dispute responder | Representment assembly and contest-or-refund recommendation |
 | Dashboard | Merchant view of traffic, verdicts, mandates, evidence and disputes |
 
+## How a purchase is decided
+
+Four stages, in order. Each can refuse. Only the policy kernel can approve on its own; the semantic
+check and the human exist to resolve what the kernel could not.
+
+```
+  agent presents four mandates and a cart
+                     |
+                     v
+  +==============================================================+
+  |  1. VERIFICATION PIPELINE                                    |
+  |  well formed and signed, subject binding, issuer trust,      |
+  |  validity window, replay, checkout binding, constraints      |
+  +==============================================================+
+         |                                          |
+   fails a step                              all seven pass
+         |                                          |
+         v                                          v
+     REFUSED                          +==============================================+
+   CRED_* reason code                 |  2. POLICY KERNEL                            |
+   agent recorded as unknown,         |  kill switch, revocation, policy hash, item  |
+   because identity was never         |  policy, tier ceiling, constraint            |
+   established                        |  satisfaction, agent controls, structuring,  |
+                                      |  budget. Deterministic. Never calls a model. |
+                                      +==============================================+
+                                          |              |                |
+                                    breaks a rule   all clear      one constraint
+                                          |              |          unresolved
+                                          v              v                |
+                                      REFUSED        APPROVED             |
+                                                   money may move         v
+                                               +===============================+
+                                               |  3. SEMANTIC CHECK            |
+                                               |  the unresolved constraint    |
+                                               |  only. DENY or ESCALATE, and  |
+                                               |  no approval member exists    |
+                                               +===============================+
+                                                     |                |
+                                                "violates"      anything else,
+                                                     |          including a clean
+                                                     v          no_violation_found
+                                                 REFUSED                |
+                                                                        v
+                                                            +======================+
+                                                            |  4. HUMAN ESCALATION |
+                                                            |  approve or deny over|
+                                                            |  WhatsApp, against a |
+                                                            |  deadline            |
+                                                            +======================+
+                                                              |        |        |
+                                                         approves    denies   silence
+                                                              |        |        |
+                                                              v        v        v
+                                                          APPROVED  REFUSED  REFUSED
+```
+
+Every uncertainty resolves towards refusing: an unparseable credential, an unknown authority, an
+expired mandate, a constraint arithmetic cannot settle, a model that is unsure, a human who does not
+answer, an unreachable gateway, an undeclared region for a region-locked item. None of them produce
+an approval.
+
+## The credentials an agent presents
+
+AP2 separates two questions and answers each at two moments. The open mandates are the standing
+authority, signed in advance by the human's trusted surface. The closed mandates are the claim about
+this specific purchase, signed by the agent. The merchant checks that the open pair is genuine, that
+the agent holds the key they were issued to, and that the closed pair fits inside the open pair.
+
+```
+   signed by the human's trusted surface     signed by the agent itself
+   (standing authority, reusable)            (this purchase, single use)
+   +-----------------------------+           +-----------------------------+
+   |  OPEN CHECKOUT MANDATE      |           | CLOSED CHECKOUT MANDATE     |
+   |  mandate.checkout.open.1    |  <-fits-  | mandate.checkout.1          |
+   |  what may be bought:        |   inside  | what is being bought:       |
+   |  merchants, line items,     |           | checkout_jwt, checkout_hash |
+   |  amount range, recurrence   |           |                             |
+   |  + cnf.jwk, the agent key   |           |                             |
+   +-----------------------------+           +-----------------------------+
+   +-----------------------------+           +-----------------------------+
+   |  OPEN PAYMENT MANDATE       |           | CLOSED PAYMENT MANDATE      |
+   |  mandate.payment.open.1     |  <-fits-  | mandate.payment.1           |
+   |  how it may be paid:        |   inside  | how it is being paid:       |
+   |  payees, instruments,       |           | transaction_id, payee,      |
+   |  budget, execution window   |           | payment_amount, instrument  |
+   |  + cnf.jwk, the agent key   |           |                             |
+   +-----------------------------+           +-----------------------------+
+```
+
+The `cnf.jwk` claim names the key the mandate was issued to. The agent proves possession by signing
+a key-binding JWT with the matching private half, which is what defeats a stolen mandate:
+presenting a genuine credential issued to somebody else fails at `CRED_SUBJECT_MISMATCH`.
+
+## End to end
+
+```
+   HUMAN PRINCIPAL              AGENT                          DWARPAL
+   sets the authority           transacts                      decides and records
+       |                            |                               |
+       | signs the open mandates    |                               |
+       +--------------------------->|                               |
+                                    |  browse, search, item detail  |
+                                    |  with purchase constraints    |
+                                    |------------------------------>|
+                                    |  quote: prices frozen, stock  |
+                                    |  held, Checkout signed by us  |
+                                    |<------------------------------|
+                                    |  presents the four mandates   |
+                                    |------------------------------>|
+                                    |                        1. verification
+                                    |                        2. policy kernel
+                                    |                        3. semantic check
+       |<---------------------------|------------------------ 4. escalation
+       |  approve or deny           |                               |
+       +--------------------------->|                               |
+                                    |                        5. Razorpay: order,
+                                    |                           authorise, capture.
+                                    |                           Never before a verdict
+                                    |                               |
+                                    |                        6. evidence packet:
+                                    |                           append-only, hash
+                                    |                           chained, verifiable
+                                    |                           with the app stopped
+                                    |                               |
+                                    |                        7. dispute: score the
+                                    |                           evidence, contest
+                                    |                           or recommend refund
+```
+
 ## Standards
 
 Implemented against the AP2 specification at https://ap2-protocol.org/. The reference
