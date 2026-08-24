@@ -478,6 +478,56 @@ def test_a_refund_that_fails_after_creation_is_filed_as_a_discrepancy(client, se
     assert filed[0].resolved is False
 
 
+def test_a_rejected_template_falls_back_rather_than_leaving_the_human_unasked(seeded, monkeypatch):
+    """A configured template that Meta will not accept must not silence the escalation.
+
+    A template can be unavailable for reasons outside this code, most often while it is still
+    awaiting review. Refusing to ask the human at all is a worse answer than asking them by the
+    route that does work, so the free-form message is tried second. The failure is still recorded,
+    because a template that never gets approved must not hide behind a working fallback.
+    """
+    from app.escalation import service as escalation_service
+    from app.settings import settings
+
+    monkeypatch.setattr(settings, "META_TEMPLATE_NAME", "not_approved_yet")
+    monkeypatch.setattr(settings, "ESCALATION_HUMAN_WHATSAPP", "+10000000000")
+
+    class TemplateRejected:
+        """Refuses a template send the way Meta does, accepts the free-form one."""
+
+        def __init__(self):
+            self.sent = []
+
+        def send(self, payload):
+            if payload.get("type") == "template":
+                raise RuntimeError("(#132001) Template name does not exist in the translation")
+            self.sent.append(payload)
+            return {"messages": [{"id": "wamid.fellback"}]}
+
+    transport = TemplateRejected()
+    escalation = escalation_service.raise_escalation(
+        seeded,
+        correlation_id="dwc_template_fallback",
+        checkout_id="co_fallback",
+        agent_id="agent:fallback",
+        constraint_text="nothing perishable",
+        amount_minor=45000,
+        currency="INR",
+        fingerprint="fp-fallback",
+        cart_summary="1 x tea",
+        raised_reason="no_violation_found_requires_human",
+        transport=transport,
+    )
+
+    # The human was reached, by the route that works.
+    assert len(transport.sent) == 1
+    assert transport.sent[0]["type"] == "interactive"
+    assert escalation.channel_message_id == "wamid.fellback"
+
+    # And the broken preferred route is still on the record, not swallowed.
+    assert "132001" in (escalation.delivery_error or "")
+
+
 def test_a_template_quick_reply_is_understood_like_an_interactive_one():
     """An approved template returns the tap under a different key than a free-form message.
 

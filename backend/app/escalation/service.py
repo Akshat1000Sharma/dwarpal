@@ -99,33 +99,61 @@ def raise_escalation(
         session.flush()
         return escalation
 
-    try:
-        common = {
-            "to_number": recipient,
-            "escalation_id": escalation.id,
-            "merchant_name": settings.MERCHANT_NAME,
-            "amount_minor": amount_minor,
-            "currency": currency,
-            "cart_summary": cart_summary,
-            "constraint_text": constraint_text,
-        }
-        if settings.META_TEMPLATE_NAME:
-            message = build_approval_template_message(
+    common = {
+        "to_number": recipient,
+        "escalation_id": escalation.id,
+        "merchant_name": settings.MERCHANT_NAME,
+        "amount_minor": amount_minor,
+        "currency": currency,
+        "cart_summary": cart_summary,
+        "constraint_text": constraint_text,
+    }
+
+    # An approved template is the only thing that reaches a quiet inbox, so it is tried first when
+    # one is configured. It can be unavailable for reasons outside this code, most often because it
+    # is still awaiting review, and refusing to ask the human at all would be a worse answer than
+    # asking them by the route that does work. The free-form message only delivers inside the
+    # 24 hour window, so this is a fallback rather than a replacement.
+    routes: list[tuple[str, dict[str, Any]]] = []
+    if settings.META_TEMPLATE_NAME:
+        routes.append((
+            f"template:{settings.META_TEMPLATE_NAME}",
+            build_approval_template_message(
                 **common,
                 template_name=settings.META_TEMPLATE_NAME,
                 language_code=settings.META_TEMPLATE_LANGUAGE,
+            ),
+        ))
+    routes.append(("interactive", build_approval_message(**common)))
+
+    failures: list[str] = []
+    for route, message in routes:
+        try:
+            response = sender.send(message)
+        except Exception as exc:
+            failures.append(f"{route}: {type(exc).__name__}: {exc}")
+            logger.warning(
+                "escalation delivery route failed",
+                extra={"context": {"escalation_id": escalation.id, "route": route}},
             )
-        else:
-            message = build_approval_message(**common)
-        response = sender.send(message)
+            continue
         messages = response.get("messages") or []
         if messages:
             escalation.channel_message_id = str(messages[0].get("id"))
-    except Exception as exc:
-        escalation.delivery_error = f"{type(exc).__name__}: {exc}"[:500]
+        logger.info(
+            "escalation delivered",
+            extra={"context": {"escalation_id": escalation.id, "route": route}},
+        )
+        if failures:
+            # Kept so an operator can see the preferred route is broken even though the human
+            # was reached. A silent fallback would hide a template that never got approved.
+            escalation.delivery_error = " | ".join(failures)[:500]
+        break
+    else:
+        escalation.delivery_error = " | ".join(failures)[:500]
         logger.warning(
-            "escalation delivery failed; the deadline still applies",
-            extra={"context": {"escalation_id": escalation.id, "error": type(exc).__name__}},
+            "escalation delivery failed on every route; the deadline still applies",
+            extra={"context": {"escalation_id": escalation.id}},
         )
     session.flush()
     return escalation
