@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import type { ReactNode } from "react";
 import { Geist, Geist_Mono } from "next/font/google";
 
@@ -62,12 +63,22 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     >
       <body className="min-h-full flex flex-col font-sans">
         <header className="border-b border-line bg-surface">
-          <div className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-4">
-            <div>
+          <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-4">
+            <div className="flex items-center gap-3">
+              <Image
+                src="/icon-192x192.png"
+                alt=""
+                width={36}
+                height={36}
+                className="rounded"
+                priority
+              />
+              <div>
               <h1 className="text-base font-semibold tracking-tight">Dwarpal</h1>
               <p className="text-xs text-muted">
                 The AP2 merchant endpoint for Razorpay. Agents never touch this dashboard.
               </p>
+              </div>
             </div>
             <p className="text-xs text-muted">
               Designed for UAP, compliant with AP2
