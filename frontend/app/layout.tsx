@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 import { Geist, Geist_Mono } from "next/font/google";
 
 import { Nav } from "@/components/nav";
@@ -48,7 +49,12 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+/**
+ * The children type is written out rather than using the generated LayoutProps helper, for the
+ * same reason as the route handler: that helper only exists once a build has emitted .next/types,
+ * and the type check runs before the build.
+ */
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html
       lang="en"

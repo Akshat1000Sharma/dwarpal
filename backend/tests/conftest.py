@@ -44,6 +44,9 @@ def _bootstrap_environment() -> None:
         "GEMINI_API_KEY": "ci-gemini-key",
         "META_VERIFY_TOKEN": "ci-verify-token",
         "META_APP_SECRET": "ci-app-secret",
+        # Without a recipient the escalation service records a delivery error instead of
+        # sending, so the escalation tests would depend on a developer's own .env.
+        "ESCALATION_HUMAN_WHATSAPP": "+10000000000",
         "MERCHANT_API_TOKEN": "test-merchant-token",
         "MERCHANT_KEY_ID": "dwarpal-merchant-test",
         "MERCHANT_SIGNING_KEY_DIR": "./secrets/merchant_keys_test",
