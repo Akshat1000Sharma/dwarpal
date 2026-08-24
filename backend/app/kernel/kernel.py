@@ -203,12 +203,18 @@ def evaluate(session: Session, request: KernelInput) -> KernelResult:
             if code is ReasonCode.UNVERIFIED_CATEGORY_FORBIDDEN:
                 result.challenge = _challenge_for(tier_name, 0, request.currency)
             return result
-        if request.buyer_region and request.buyer_region in item.region_lock:
+        if item.region_lock and (
+            request.buyer_region is None or request.buyer_region in item.region_lock
+        ):
+            # An undeclared region is an unknown state, and unknown states fail closed. Skipping
+            # the check when the buyer says nothing would make a legal restriction opt-in for the
+            # party it restricts.
             return deny(
                 ReasonCode.ITEM_REGION_LOCKED,
                 step="item_policy",
                 sku=item.sku,
-                region=request.buyer_region,
+                region=request.buyer_region or "undeclared",
+                region_lock=list(item.region_lock),
             )
 
     # 5. tier ceiling. An unverified agent gets a smaller door, not a closed one.

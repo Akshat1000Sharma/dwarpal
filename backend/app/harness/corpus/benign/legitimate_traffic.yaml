@@ -84,6 +84,9 @@ scenarios:
         quantity: 1
     mandate:
       issuer_id: did:web:bank.dwarpal.test
+    setup:
+      # The wine may not be sold into four states, so a legitimate buyer says where it is.
+      buyer_region: KA
     expect_blocked: false
 
   - id: budget-partially-consumed

@@ -16,7 +16,9 @@ from sqlalchemy.orm import Session
 from app.db.base import utcnow
 from app.db.models import HoldStatus, InventoryHold, Product
 
-RESTRICTED_CATEGORIES: frozenset[str] = frozenset({"alcohol", "restricted-blades"})
+# Imported rather than redefined: the catalog only advertises what the kernel actually
+# enforces, so the published flag cannot drift away from the rule behind it.
+from app.kernel.kernel import RESTRICTED_CATEGORIES
 
 
 @dataclass(frozen=True)

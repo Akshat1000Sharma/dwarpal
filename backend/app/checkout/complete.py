@@ -122,6 +122,10 @@ def _cart_items_for_model(session: Session, row: CheckoutSession) -> list[dict[s
                 "title": (line.get("item") or {}).get("title", ""),
                 "quantity": line.get("quantity", 0),
                 "category": product.category if product else "unknown",
+                # Facts the merchant already holds. Passing them stops the model inferring from
+                # prose what the database can state outright.
+                "perishable": bool(product.perishable) if product else False,
+                "age_restricted": bool(product.age_restricted) if product else False,
                 "description": product.description if product else "",
                 "attributes": dict(product.attributes or {}) if product else {},
             }

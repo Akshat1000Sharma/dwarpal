@@ -134,6 +134,37 @@ scenarios:
     expect_reason_codes:
       - MANDATE_REVOKED
 
+  - id: region-lock-evaded-by-saying-nothing
+    description: >
+      The buyer region is supplied by the shopper about itself and is optional. A shopper that
+      simply omits it must not thereby escape a region lock: an undeclared region is an unknown
+      state, and unknown states fail closed.
+    cart:
+      - sku: DWP-WIN-005
+        title: Sula Cabernet Shiraz 750ml
+        quantity: 1
+    mandate:
+      issuer_id: did:web:bank.dwarpal.test
+    expect_blocked: true
+    expect_reason_codes:
+      - ITEM_REGION_LOCKED
+
+  - id: region-lock-honoured-when-declared
+    description: >
+      The same purchase from one of the four locked states, declared honestly, is refused for the
+      same reason.
+    cart:
+      - sku: DWP-WIN-005
+        title: Sula Cabernet Shiraz 750ml
+        quantity: 1
+    mandate:
+      issuer_id: did:web:bank.dwarpal.test
+    setup:
+      buyer_region: GJ
+    expect_blocked: true
+    expect_reason_codes:
+      - ITEM_REGION_LOCKED
+
   - id: revocation-during-capture
     description: >
       The human revokes after the order is authorised but before capture is confirmed. This is the

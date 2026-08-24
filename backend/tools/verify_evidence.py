@@ -63,24 +63,44 @@ def compute_entry_hash(row: dict[str, Any]) -> str:
     )
 
 
-def load_public_key(jwks_path: str | None, pem_path: str | None) -> Any:
+def load_public_keys(jwks_path: str | None, pem_path: str | None) -> list[Any]:
+    """Every key a packet might have been signed with, not merely the current one.
+
+    Packets are append-only and keep the signature made by the key that was live when they were
+    written, so a chain that spans a key rotation needs all of them. Taking only the first key in
+    the set silently fails every packet older than the most recent rotation.
+    """
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import ec
 
     if jwks_path:
         data = json.loads(Path(jwks_path).read_text(encoding="utf-8"))
-        keys = data.get("keys", [data]) if isinstance(data, dict) else data
-        jwk = keys[0]
-        x = int.from_bytes(b64url_decode(jwk["x"]), "big")
-        y = int.from_bytes(b64url_decode(jwk["y"]), "big")
-        return ec.EllipticCurvePublicNumbers(x, y, ec.SECP256R1()).public_key()
+        entries = data.get("keys", [data]) if isinstance(data, dict) else data
+        loaded = []
+        for jwk in entries:
+            x = int.from_bytes(b64url_decode(jwk["x"]), "big")
+            y = int.from_bytes(b64url_decode(jwk["y"]), "big")
+            loaded.append(ec.EllipticCurvePublicNumbers(x, y, ec.SECP256R1()).public_key())
+        if not loaded:
+            raise SystemExit("the JWK Set contains no keys")
+        return loaded
     if pem_path:
         raw = Path(pem_path).read_bytes()
         if b"PRIVATE KEY" in raw:
-            private = serialization.load_pem_private_key(raw, password=None)
-            return private.public_key()
-        return serialization.load_pem_public_key(raw)
+            return [serialization.load_pem_private_key(raw, password=None).public_key()]
+        return [serialization.load_pem_public_key(raw)]
     raise SystemExit("one of --jwks or --pem is required to verify signatures")
+
+
+def verify_es256_any(token: str, public_keys: list[Any]) -> dict[str, Any]:
+    """Accept the token if any published key verifies it. Re-raise the last failure otherwise."""
+    last: Exception = ValueError("no verification keys were supplied")
+    for key in public_keys:
+        try:
+            return verify_es256(token, key)
+        except Exception as exc:
+            last = exc
+    raise last
 
 
 def verify_es256(token: str, public_key: Any) -> dict[str, Any]:
@@ -145,7 +165,7 @@ def rows_from_dsn(dsn: str) -> list[dict[str, Any]]:
 # --- verification --------------------------------------------------------------------------------
 
 
-def verify(rows: list[dict[str, Any]], public_key: Any) -> dict[str, Any]:
+def verify(rows: list[dict[str, Any]], public_keys: list[Any]) -> dict[str, Any]:
     problems: list[dict[str, Any]] = []
     expected_prev = GENESIS_HASH
     expected_seq = 1
@@ -177,7 +197,7 @@ def verify(rows: list[dict[str, Any]], public_key: Any) -> dict[str, Any]:
                 }
             )
         try:
-            claims = verify_es256(row["signature"], public_key)
+            claims = verify_es256_any(row["signature"], public_keys)
             signatures_checked += 1
             if claims.get("entry_hash") != row["entry_hash"]:
                 problems.append({"seq": seq, "problem": "signature_covers_a_different_entry"})
@@ -224,8 +244,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     rows = rows_from_jsonl(args.jsonl) if args.jsonl else rows_from_dsn(args.dsn)
-    public_key = load_public_key(args.jwks, args.pem)
-    report = verify(rows, public_key)
+    public_keys = load_public_keys(args.jwks, args.pem)
+    report = verify(rows, public_keys)
 
     if args.json:
         print(json.dumps(report, indent=2))

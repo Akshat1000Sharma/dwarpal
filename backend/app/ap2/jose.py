@@ -81,6 +81,17 @@ def private_key_to_pem(key: ec.EllipticCurvePrivateKey) -> bytes:
     )
 
 
+def public_key_from_pem(data: bytes) -> ec.EllipticCurvePublicKey:
+    """Load a public key, accepting a private key file and taking its public half."""
+    try:
+        key = serialization.load_pem_public_key(data)
+    except ValueError:
+        key = serialization.load_pem_private_key(data, password=None).public_key()
+    if not isinstance(key, ec.EllipticCurvePublicKey):
+        raise JoseError("a merchant verification key must be an EC public key")
+    return key
+
+
 def private_key_from_pem(data: bytes) -> ec.EllipticCurvePrivateKey:
     key = serialization.load_pem_private_key(data, password=None)
     if not isinstance(key, ec.EllipticCurvePrivateKey):

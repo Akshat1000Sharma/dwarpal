@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select
@@ -49,6 +50,103 @@ def present_for(db, quoted, *, spec=None, tamper=None, principals=None, lines=No
         amount_minor=quoted.row.total_minor,
         tamper=tamper,
     )
+
+
+WINE = [("DWP-WIN-005", "Sula Cabernet Shiraz 750ml", 1)]
+# The wine is the only region-locked product and it is also age-restricted, so the age check
+# refuses first for every tier below regulated. Reaching the region check needs this issuer.
+REGULATED_ISSUER = "did:web:bank.dwarpal.test"
+
+
+def regulated_principals(agent_id: str):
+    from app.trust.registry import publish_key
+
+    principals = factory.Principals.create(agent_id=agent_id, issuer_id=REGULATED_ISSUER)
+    publish_key(REGULATED_ISSUER, principals.issuer.public_jwk())
+    return principals
+
+
+def test_a_region_locked_item_is_refused_when_no_region_is_declared(seeded, gateway):
+    """An undeclared region is an unknown state, and unknown states fail closed.
+
+    buyer_region is supplied by the shopper about itself and is optional, so treating its absence
+    as "not in the locked list" would make a legal restriction opt-in for the party it restricts.
+    """
+    db = seeded
+    quoted = make_quote(db, lines=WINE, correlation="dwc_region_undeclared")
+    _, presentation = present_for(
+        db, quoted, lines=WINE, principals=regulated_principals("agent:region-undeclared")
+    )
+
+    outcome = complete(
+        db,
+        presentation.credentials,
+        correlation_id="dwc_region_undeclared",
+        gateway=gateway,
+    )
+
+    assert outcome.status == "refused"
+    assert outcome.reason_code is ReasonCode.ITEM_REGION_LOCKED
+    assert outcome.detail["region"] == "undeclared"
+
+
+def test_a_region_locked_item_is_allowed_from_a_permitted_region(seeded, gateway):
+    """The lock names four states. Declaring somewhere else must still be able to buy."""
+    db = seeded
+    quoted = make_quote(db, lines=WINE, correlation="dwc_region_ok")
+    _, presentation = present_for(
+        db, quoted, lines=WINE, principals=regulated_principals("agent:region-ok")
+    )
+
+    outcome = complete(
+        db,
+        presentation.credentials,
+        correlation_id="dwc_region_ok",
+        gateway=gateway,
+        buyer_region="KA",
+    )
+
+    assert outcome.reason_code is not ReasonCode.ITEM_REGION_LOCKED
+
+
+def test_a_region_locked_item_is_refused_from_a_locked_region(seeded, gateway):
+    db = seeded
+    quoted = make_quote(db, lines=WINE, correlation="dwc_region_blocked")
+    _, presentation = present_for(
+        db, quoted, lines=WINE, principals=regulated_principals("agent:region-blocked")
+    )
+
+    outcome = complete(
+        db,
+        presentation.credentials,
+        correlation_id="dwc_region_blocked",
+        gateway=gateway,
+        buyer_region="GJ",
+    )
+
+    assert outcome.status == "refused"
+    assert outcome.reason_code is ReasonCode.ITEM_REGION_LOCKED
+    assert outcome.detail["region"] == "GJ"
+
+
+def test_the_restricted_category_list_has_exactly_one_definition():
+    """The catalog advertises what the kernel enforces, so both must read the same list.
+
+    Two copies drifted apart would make the shop either advertise a restriction it does not
+    enforce, or enforce one it never advertised.
+    """
+    from app.catalog import service as catalog_service
+    from app.kernel import kernel as kernel_module
+
+    assert catalog_service.RESTRICTED_CATEGORIES is kernel_module.RESTRICTED_CATEGORIES
+
+    root = Path(__file__).resolve().parent.parent / "app"
+    defining = [
+        path
+        for path in root.rglob("*.py")
+        if "RESTRICTED_CATEGORIES: frozenset" in path.read_text(encoding="utf-8")
+    ]
+    assert len(defining) == 1, f"defined in more than one place: {defining}"
 
 
 def test_full_human_not_present_purchase_completes(seeded, gateway):

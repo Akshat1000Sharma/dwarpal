@@ -62,6 +62,11 @@ def build_user_prompt(
                 quantity=item.get("quantity", 0),
             )
         )
+        # Structured facts the merchant holds, stated plainly. Without these the model has to
+        # infer them from the prose, which is guesswork about something already known.
+        flags = [name for name in ("perishable", "age_restricted") if item.get(name)]
+        if flags:
+            lines.append(f"  merchant flags: {', '.join(flags)}")
         description = str(item.get("description", "")).strip()
         if description:
             lines.append(f"  description: {_sanitise(description, 600)}")

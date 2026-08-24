@@ -236,6 +236,7 @@ def run_scenario(
                 gateway=gateway,
                 semantic_client=KeywordSemanticClient(),
                 whatsapp=RecordingTransport(),
+                buyer_region=setup.get("buyer_region"),
             )
 
         # Revoking once this attempt has settled leaves the next attempt, which gets its own quote
