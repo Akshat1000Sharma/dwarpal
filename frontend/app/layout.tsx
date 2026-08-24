@@ -14,10 +14,38 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const SITE_URL = process.env.SITE_URL ?? "http://localhost:3000";
+const DESCRIPTION =
+  "The merchant's view of agent traffic, policy verdicts, mandates, evidence and disputes.";
+
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: "Dwarpal merchant dashboard",
-  description:
-    "The merchant's view of agent traffic, policy verdicts, mandates, evidence and disputes.",
+  description: DESCRIPTION,
+  applicationName: "Dwarpal",
+  icons: {
+    // app/favicon.ico is picked up by the file convention; these are the explicit sizes.
+    icon: [
+      { url: "/favicon.png", type: "image/png", sizes: "32x32" },
+      { url: "/icon-192x192.png", type: "image/png", sizes: "192x192" },
+      { url: "/icon-512x512.png", type: "image/png", sizes: "512x512" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
+  },
+  openGraph: {
+    type: "website",
+    siteName: "Dwarpal",
+    title: "Dwarpal merchant dashboard",
+    description: DESCRIPTION,
+    url: "/",
+    images: [{ url: "/og-image.png", width: 1200, height: 630, alt: "Dwarpal" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Dwarpal merchant dashboard",
+    description: DESCRIPTION,
+    images: ["/og-image.png"],
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
