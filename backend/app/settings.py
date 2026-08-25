@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     SECRET_KEY: str = Field(min_length=16)
     PUBLIC_BASE_URL: str = "http://localhost:8000"
+    # The MCP server is a separate process (python -m app.mcp.server --http), so its address is
+    # not derivable from PUBLIC_BASE_URL. Left empty, discovery omits the endpoint rather than
+    # advertising one that answers 404.
+    MCP_PUBLIC_URL: str = ""
 
     DB_HOST: str = "localhost"
     DB_PORT: int = 5432
@@ -50,18 +54,28 @@ class Settings(BaseSettings):
     META_VERIFY_TOKEN: str = Field(min_length=1)
     META_APP_SECRET: str = Field(min_length=1)
     META_APP_ID: str = ""
+    # The WhatsApp Business Account the phone number belongs to. Only the channel preflight
+    # needs it, to confirm a configured template actually exists. It appears as entry[0].id in
+    # any inbound webhook payload.
+    META_WABA_ID: str = ""
     META_GRAPH_VERSION: str = "v23.0"
     # Set once an approved Utility template exists. Empty means send the free-form interactive
     # message, which Meta only delivers inside the 24 hour customer service window.
     META_TEMPLATE_NAME: str = ""
     META_TEMPLATE_LANGUAGE: str = "en"
     ESCALATION_HUMAN_WHATSAPP: str = ""
+    # Purchase receipts: "an agent bought this on your behalf", and the refusal counterpart.
+    # Separate from the approval template because the two carry different parameters and Meta
+    # approves each template on its own.
+    NOTIFY_PURCHASE_RECEIPTS: bool = True
+    META_RECEIPT_TEMPLATE_NAME: str = ""
+    META_RECEIPT_TEMPLATE_LANGUAGE: str = "en"
     # Guards the whole merchant control plane. Empty refuses every merchant request rather
     # than serving it open, because the documented runbook tunnels this port publicly.
     MERCHANT_API_TOKEN: str = ""
     ESCALATION_DEADLINE_SECONDS: int = 900
 
-    MERCHANT_KEY_ID: str = "dwarpal-merchant-01"
+    MERCHANT_KEY_ID: str = "dwarpal-merchant"
     MERCHANT_SIGNING_KEY_DIR: str = "./secrets/merchant_keys"
     MERCHANT_ID: str = "dwarpal-demo-merchant"
     MERCHANT_NAME: str = "Dwarpal Demo Store"

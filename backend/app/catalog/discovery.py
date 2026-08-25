@@ -99,7 +99,7 @@ def discovery_document(session: Session) -> dict[str, Any]:
             "quote": _url("/checkout/quote"),
             "checkout_complete": _url("/checkout/complete"),
             "checkout_status": _url("/checkout/{checkout_id}"),
-            "mcp": _url("/mcp"),
+            **({"mcp": settings.MCP_PUBLIC_URL} if settings.MCP_PUBLIC_URL else {}),
         },
         "policy": {
             "current_hash": terms.content_hash,

@@ -29,10 +29,21 @@ CREATE TRIGGER trg_evidence_append_only
 """
 
 
+# create_all adds tables but never columns, and this project has no migration tool. Columns added
+# to an existing table therefore need saying once, here, in a form that is safe to run on every
+# start. Postgres supports IF NOT EXISTS on ADD COLUMN, so this is idempotent and costs nothing
+# after the first run.
+_ADDED_COLUMNS = """
+ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS image_alt VARCHAR(256) NOT NULL DEFAULT '';
+"""
+
+
 def create_schema(target: Engine | None = None) -> None:
     bind = target or engine
     Base.metadata.create_all(bind)
     with bind.begin() as connection:
+        connection.execute(text(_ADDED_COLUMNS))
         connection.execute(text(_APPEND_ONLY_TRIGGER))
 
 

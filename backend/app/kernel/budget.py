@@ -43,8 +43,20 @@ class BudgetExceeded(Exception):
 
 
 def _lock_mandate(session: Session, mandate_id: str) -> OpenMandate | None:
-    """Take the mandate row with FOR UPDATE. Everything else here runs under that lock."""
-    return session.scalar(select(OpenMandate).where(OpenMandate.id == mandate_id).with_for_update())
+    """Take the mandate row with FOR UPDATE and read it fresh. Everything else runs under it.
+
+    populate_existing is the whole point of this function and must not be dropped. Without it the
+    FOR UPDATE row is fetched and then thrown away: if this session already loaded the mandate,
+    the identity map hands back the copy from before the lock, so the balance is read from a
+    snapshot taken before every other session's committed spend. The lock serialises correctly and
+    the arithmetic is still wrong, which is the failure mode this whole module exists to prevent.
+    """
+    return session.scalar(
+        select(OpenMandate)
+        .where(OpenMandate.id == mandate_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
 
 
 def _expire_stale(session: Session, mandate_id: str) -> int:
@@ -74,7 +86,8 @@ def _reserved_total(session: Session, mandate_id: str) -> int:
 
 
 def state(session: Session, mandate_id: str) -> BudgetState:
-    mandate = session.get(OpenMandate, mandate_id)
+    """Read-only view. Refreshed for the same reason the locked read is."""
+    mandate = session.get(OpenMandate, mandate_id, populate_existing=True)
     if mandate is None:
         raise LookupError(f"unknown mandate {mandate_id}")
     return BudgetState(

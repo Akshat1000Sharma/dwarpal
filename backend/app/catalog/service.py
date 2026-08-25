@@ -32,6 +32,7 @@ class CatalogEntry:
             "sku": p.sku,
             "title": p.title,
             "description": p.description,
+            "image": {"url": p.image_url, "alt": p.image_alt or p.title} if p.image_url else None,
             "category": p.category,
             "price": {"amount": p.price_minor, "currency": p.currency},
             "availability": {
@@ -59,6 +60,7 @@ class CatalogEntry:
             "sku": self.product.sku,
             "title": self.product.title,
             "category": self.product.category,
+            "image_url": self.product.image_url,
             "price_minor": self.product.price_minor,
             "currency": self.product.currency,
             "available_at_quote": self.available,

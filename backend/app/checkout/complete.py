@@ -12,6 +12,8 @@ The ordering rules it enforces:
     - a revocation that lands after capture triggers an automatic compensating refund, its own
       status, and an evidence packet regardless
     - an evidence packet is written on every path, including every refusal
+    - the human is told what happened, after the outcome is recorded and never before, and a
+      messaging failure cannot unwind it
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.ap2.constraints import ConstraintOutcome
@@ -55,6 +58,7 @@ from app.kernel.verdict import KernelAction, allow, refuse
 from app.kernel.verdict import record as record_verdict
 from app.keys import merchant_key
 from app.logging import get_logger
+from app.notify import service as receipts
 from app.payments import reconcile as reconciliation
 from app.payments import service as payments
 from app.payments.gateway import GatewayError, PaymentGateway, get_gateway
@@ -156,10 +160,15 @@ def _kernel_items(session: Session, row: CheckoutSession) -> list[kernel.CartIte
 
 
 def _upsert_open_mandate(session: Session, authority: VerifiedAuthority) -> OpenMandate:
-    """Record the open Checkout Mandate so budget, revocation and usage can be tracked."""
-    existing = session.scalar(
-        select(OpenMandate).where(OpenMandate.digest == authority.open_checkout_digest)
-    )
+    """Record the open Checkout Mandate so budget, revocation and usage can be tracked.
+
+    The digest carries a unique index, and a human's standing mandate is presented by every
+    session that draws on it, so two concurrent checkouts against the same mandate both find
+    nothing and both insert. A plain read-then-insert loses that race with an integrity error and
+    a 500. The insert is attempted inside a savepoint and, if the other session won, the row it
+    committed is read instead.
+    """
+    existing = _find_mandate(session, authority.open_checkout_digest)
     if existing is not None:
         return existing
 
@@ -192,9 +201,22 @@ def _upsert_open_mandate(session: Session, authority: VerifiedAuthority) -> Open
         not_before=None,
         expires_at=None,
     )
-    session.add(row)
-    session.flush()
+    try:
+        with session.begin_nested():
+            session.add(row)
+            session.flush()
+    except IntegrityError:
+        # Another session inserted the same mandate first. The savepoint is gone, the outer
+        # transaction is intact, and the winner's row is now visible.
+        winner = _find_mandate(session, authority.open_checkout_digest)
+        if winner is None:  # pragma: no cover - only reachable if the unique index is dropped
+            raise
+        return winner
     return row
+
+
+def _find_mandate(session: Session, digest: str) -> OpenMandate | None:
+    return session.scalar(select(OpenMandate).where(OpenMandate.digest == digest))
 
 
 def _receipt(
@@ -220,6 +242,90 @@ def _receipt(
 
 
 def complete(
+    session: Session,
+    credentials: PresentedCredentials,
+    *,
+    correlation_id: str,
+    semantic_client: SemanticClient | None = None,
+    gateway: PaymentGateway | None = None,
+    whatsapp: WhatsAppTransport | None = None,
+    audience: str | None = None,
+    buyer_region: str | None = None,
+    authorize: bool = True,
+    connection_id: str | None = None,
+) -> CompletionOutcome:
+    """Decide a checkout attempt, then tell the human what was decided.
+
+    The receipt is sent strictly after the outcome is recorded, and its failure is swallowed. A
+    messaging outage must never unwind a settled money decision or turn a refusal into an error.
+    """
+    outcome = _decide(
+        session,
+        credentials,
+        correlation_id=correlation_id,
+        semantic_client=semantic_client,
+        gateway=gateway,
+        whatsapp=whatsapp,
+        audience=audience,
+        buyer_region=buyer_region,
+        authorize=authorize,
+    )
+    _send_receipt(
+        session,
+        outcome,
+        correlation_id=correlation_id,
+        connection_id=connection_id,
+        transport=whatsapp,
+    )
+    return outcome
+
+
+def _is_identified(agent_id: str | None) -> bool:
+    """Whether a principal is actually known, as opposed to a caller who presented nothing.
+
+    app.api.deps.agent_identifier hands back "agent:anonymous" when no connection and no X-Agent-Id
+    were presented, and the interop driver uses "agent:anonymous-<run>" variants, so the prefix is
+    what has to be excluded rather than any one literal.
+    """
+    if not agent_id:
+        return False
+    return not agent_id.startswith("agent:anonymous")
+
+
+def _send_receipt(
+    session: Session,
+    outcome: CompletionOutcome,
+    *,
+    correlation_id: str,
+    connection_id: str | None,
+    transport: WhatsAppTransport | None = None,
+) -> None:
+    """Tell the principal what their agent just did.
+
+    A refusal that happened before the agent was identified gets no receipt: there is no known
+    principal to tell, and guessing would mean messaging the merchant's own number every time an
+    unknown caller presented a forged credential.
+    """
+    if outcome.checkout_id is None:
+        return
+    row = session.get(CheckoutSession, outcome.checkout_id)
+    if row is None or not _is_identified(row.agent_id):
+        return
+    receipts.notify_safely(
+        session,
+        correlation_id=correlation_id,
+        outcome=outcome.status,
+        agent_id=row.agent_id,
+        amount_minor=row.total_minor,
+        currency=row.currency,
+        cart_summary=_cart_summary(row),
+        reason_code=outcome.reason_code.value,
+        connection_id=connection_id,
+        transport=transport,
+    )
+
+
+def _decide(
     session: Session,
     credentials: PresentedCredentials,
     *,
@@ -785,7 +891,19 @@ def _compensate_after_capture(
             "refund_error": failure,
         },
     )
-    return locker.append(session, correlation_id=payment.correlation_id, body=body).packet_id
+    packet_id = locker.append(session, correlation_id=payment.correlation_id, body=body).packet_id
+    if refunded:
+        receipts.notify_safely(
+            session,
+            correlation_id=payment.correlation_id,
+            outcome="compensated",
+            agent_id=payment.agent_id,
+            amount_minor=payment.amount_minor,
+            currency=payment.currency,
+            cart_summary=_cart_summary(row),
+            reason_code=ReasonCode.REVOKED_AFTER_CAPTURE_COMPENSATED.value,
+        )
+    return packet_id
 
 
 def finalise_captured(
@@ -839,7 +957,18 @@ def finalise_captured(
         checkout_row=row,
         extra={"finalised_by": "razorpay payment.captured webhook"},
     )
-    return locker.append(session, correlation_id=payment.correlation_id, body=body).packet_id
+    packet_id = locker.append(session, correlation_id=payment.correlation_id, body=body).packet_id
+    receipts.notify_safely(
+        session,
+        correlation_id=payment.correlation_id,
+        outcome="completed",
+        agent_id=payment.agent_id,
+        amount_minor=payment.amount_minor,
+        currency=payment.currency,
+        cart_summary=_cart_summary(row),
+        reason_code=ReasonCode.APPROVED.value,
+    )
+    return packet_id
 
 
 def finalise_failed(
@@ -873,7 +1002,18 @@ def finalise_failed(
             "gateway_error": error or {},
         },
     )
-    return locker.append(session, correlation_id=payment.correlation_id, body=body).packet_id
+    packet_id = locker.append(session, correlation_id=payment.correlation_id, body=body).packet_id
+    receipts.notify_safely(
+        session,
+        correlation_id=payment.correlation_id,
+        outcome="refused",
+        agent_id=payment.agent_id,
+        amount_minor=payment.amount_minor,
+        currency=payment.currency,
+        cart_summary=_cart_summary(row),
+        reason_code=ReasonCode.PAYMENT_GATEWAY_ERROR.value,
+    )
+    return packet_id
 
 
 def _authorize(gateway: PaymentGateway | None, payment: Any) -> dict[str, Any] | None:

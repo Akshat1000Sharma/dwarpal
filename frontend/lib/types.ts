@@ -6,6 +6,16 @@ export type Amount = {
   display: string;
 };
 
+/**
+ * What the catalog document carries. CatalogEntry.as_document() emits minor units and a currency
+ * and no rendered string, because it is also the agent-facing and MCP document, where a formatted
+ * price would be a second source of truth. The console formats it with money().
+ */
+export type MinorAmount = {
+  amount: number;
+  currency: string;
+};
+
 export type Overview = {
   window_hours: number;
   verdicts: { allow: number; deny: number; escalate: number; challenge: number; total: number };
@@ -260,3 +270,125 @@ export type Reports = {
 };
 
 export type ReasonCodeRow = { code: string; agent_action: string };
+
+export type ConnectionScope = "buyer" | "merchant";
+
+export type Connection = {
+  id: string;
+  label: string;
+  scope: ConnectionScope;
+  agent_id: string;
+  whatsapp: string | null;
+  token_prefix: string;
+  notify_completed: boolean;
+  notify_refused: boolean;
+  revoked: boolean;
+  created_at: string;
+  last_used_at: string | null;
+  endpoints: Record<string, string>;
+  header: string;
+  /** Present exactly once, in the response that minted the connection. */
+  token?: string;
+  token_shown_once?: boolean;
+};
+
+export type ConnectionsPayload = {
+  connections: Connection[];
+  header: string;
+  public_base_url: string;
+};
+
+export type NotificationRow = {
+  id: string;
+  correlation_id: string;
+  kind: string;
+  route: string;
+  to: string | null;
+  status: string;
+  provider_message_id: string | null;
+  error: string | null;
+  summary: string;
+  created_at: string;
+};
+
+export type BuyerPlanLine = { sku: string; title: string; quantity: number };
+
+export type StockedCatalogItem = CatalogItem & { stock_total: number };
+
+export type BuyerPlan = {
+  planner: string;
+  lines: BuyerPlanLine[];
+  budget_cap_minor: number;
+  natural_language: string[];
+  rationale: string;
+  dropped: Array<{ sku: string; why: string }>;
+  estimated_total_minor: number;
+};
+
+export type BuyerRunEvent = {
+  seq: number;
+  level: string;
+  step: string;
+  message: string;
+  data: Record<string, unknown>;
+  duration_ms: number | null;
+  at: string;
+};
+
+export type BuyerRunSummary = {
+  id: string;
+  prompt: string;
+  planner: string;
+  agent_id: string;
+  status: string;
+  correlation_id: string;
+  checkout_id: string | null;
+  razorpay_order_id: string | null;
+  reason_code: string | null;
+  evidence_packet_id: string | null;
+  amount: Amount;
+  plan: BuyerPlan | Record<string, never>;
+  created_at: string;
+  finished_at: string | null;
+};
+
+export type BuyerRunDetail = BuyerRunSummary & {
+  events: BuyerRunEvent[];
+  receipts: Array<{ kind: string; status: string; route: string; error: string | null; at: string }>;
+};
+
+export type GatewayMode = {
+  mode: "razorpay" | "stub";
+  key_id: string | null;
+  test_card: { number: string; expiry: string; cvv: string; name: string; note: string };
+  merchant: { id: string; name: string };
+  explanation: string;
+};
+
+export type BuyerDefaults = {
+  budget_cap_minor: number;
+  suggested_prompts: string[];
+  constraints: string[];
+};
+
+export type CatalogItem = {
+  sku: string;
+  title: string;
+  description: string;
+  /** Null when the seed has no picture for this item; the UI draws a placeholder instead. */
+  image: { url: string; alt: string } | null;
+  category: string;
+  price: MinorAmount;
+  availability: { in_stock: boolean; available_quantity: number; stock_total?: number };
+  purchase_constraints: {
+    min_order_quantity: number;
+    max_order_quantity: number;
+    returnable: boolean;
+    return_window_days: number;
+    age_restricted: boolean;
+    region_locked: string[];
+    restricted_category: boolean;
+    perishable: boolean;
+  };
+  attributes: Record<string, unknown>;
+};

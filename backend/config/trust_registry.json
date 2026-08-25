@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "description": "Issuing authorities Dwarpal recognises, and what each tier is permitted to do. Adding an authority is a configuration change, never a code change.",
   "tiers": {
     "unverified": {

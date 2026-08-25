@@ -23,8 +23,8 @@ export async function revokeMandate(mandateId: string, reason: string): Promise<
       method: "POST",
       body: { reason: reason || "revoked by the merchant on the principal's behalf" },
     });
-    revalidatePath("/mandates");
-    revalidatePath("/traffic");
+    revalidatePath("/merchant/mandates");
+    revalidatePath("/merchant/traffic");
     return { ok: true, message: "Mandate revoked. It is refused at its next use." };
   } catch (error) {
     return failure(error);
@@ -37,8 +37,8 @@ export async function setKillSwitch(agentId: string, enabled: boolean): Promise<
       method: "PATCH",
       body: { kill_switch: enabled },
     });
-    revalidatePath("/agents");
-    revalidatePath("/traffic");
+    revalidatePath("/merchant/agents");
+    revalidatePath("/merchant/traffic");
     return {
       ok: true,
       message: enabled
@@ -64,7 +64,7 @@ export async function updateAgentLimits(
       method: "PATCH",
       body: limits,
     });
-    revalidatePath("/agents");
+    revalidatePath("/merchant/agents");
     return { ok: true, message: "Agent limits updated." };
   } catch (error) {
     return failure(error);
@@ -76,7 +76,7 @@ export async function resolveException(exceptionId: string): Promise<ActionResul
     await backendFetch(`/merchant/exceptions/${encodeURIComponent(exceptionId)}/resolve`, {
       method: "POST",
     });
-    revalidatePath("/");
+    revalidatePath("/merchant");
     return { ok: true, message: "Exception marked as reconciled." };
   } catch (error) {
     return failure(error);
@@ -92,7 +92,7 @@ export async function openDispute(correlationId: string, claim: string): Promise
         claim: claim || "the cardholder states this purchase was not authorised",
       },
     });
-    revalidatePath("/disputes");
+    revalidatePath("/merchant/disputes");
     return { ok: true, message: `Representment assembled as dispute ${created.id}.` };
   } catch (error) {
     return failure(error);
@@ -108,8 +108,8 @@ export async function decideDispute(
       method: "POST",
       body: { outcome },
     });
-    revalidatePath("/disputes");
-    revalidatePath(`/disputes/${disputeId}`);
+    revalidatePath("/merchant/disputes");
+    revalidatePath(`/merchant/disputes/${disputeId}`);
     return { ok: true, message: `Dispute recorded as ${outcome}.` };
   } catch (error) {
     return failure(error);

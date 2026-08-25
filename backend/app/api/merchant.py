@@ -47,7 +47,7 @@ router = APIRouter(
 
 
 def _amount(minor: int, currency: str = "INR") -> dict[str, Any]:
-    return {"amount": minor, "currency": currency, "display": f"{currency} {minor / 100:.2f}"}
+    return {"amount": minor, "currency": currency, "display": f"{currency} {minor / 100:,.2f}"}
 
 
 @router.get("/overview")
@@ -106,43 +106,78 @@ def overview(db: Annotated[Session, Depends(get_db)]) -> dict[str, Any]:
 
 
 @router.get("/traffic")
-def traffic(db: Annotated[Session, Depends(get_db)]) -> dict[str, Any]:
-    """Live agent traffic: who is transacting, under whose authority, and against what budget."""
+def traffic(
+    db: Annotated[Session, Depends(get_db)],
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    """Live agent traffic: who is transacting, under whose authority, and against what budget.
+
+    Every aggregate is one grouped query over the page of agents being shown, not one query per
+    agent. A merchant with a few hundred agents is ordinary, and the per-agent version of this took
+    tens of seconds against exactly that.
+    """
     since = utcnow() - timedelta(seconds=settings.VELOCITY_WINDOW_SECONDS)
-    agents = list(db.scalars(select(AgentIdentity).order_by(AgentIdentity.agent_id)).all())
+    total = int(db.scalar(select(func.count(AgentIdentity.id))) or 0)
+    agents = list(
+        db.scalars(
+            select(AgentIdentity).order_by(desc(AgentIdentity.created_at)).limit(limit).offset(offset)
+        ).all()
+    )
+    identifiers = [a.agent_id for a in agents]
+    if not identifiers:
+        return {"total": total, "limit": limit, "offset": offset, "agents": []}
+
+    spend_by_agent: dict[str, tuple[int, int]] = {
+        row[0]: (int(row[1] or 0), int(row[2] or 0))
+        for row in db.execute(
+            select(
+                SpendEvent.agent_id,
+                func.coalesce(func.sum(SpendEvent.amount_minor), 0),
+                func.count(SpendEvent.id),
+            )
+            .where(SpendEvent.agent_id.in_(identifiers), SpendEvent.occurred_at >= since)
+            .group_by(SpendEvent.agent_id)
+        ).all()
+    }
+
+    budget_by_agent: dict[str, tuple[int, int, int]] = {
+        row[0]: (int(row[1] or 0), int(row[2] or 0), int(row[3] or 0))
+        for row in db.execute(
+            select(
+                OpenMandate.agent_id,
+                func.coalesce(func.sum(OpenMandate.cap_minor), 0),
+                func.coalesce(func.sum(OpenMandate.committed_minor), 0),
+                func.count(OpenMandate.id),
+            )
+            .where(OpenMandate.agent_id.in_(identifiers), OpenMandate.revoked_at.is_(None))
+            .group_by(OpenMandate.agent_id)
+        ).all()
+    }
+
+    # The most recent verdict per agent, in one pass: rank inside each agent and keep the first.
+    ranked = (
+        select(
+            VerdictRow.agent_id,
+            VerdictRow.decision,
+            VerdictRow.reason_code,
+            VerdictRow.created_at,
+            func.row_number()
+            .over(partition_by=VerdictRow.agent_id, order_by=desc(VerdictRow.created_at))
+            .label("rank"),
+        )
+        .where(VerdictRow.agent_id.in_(identifiers))
+        .subquery()
+    )
+    last_by_agent = {
+        row[0]: {"decision": row[1], "reason_code": row[2], "at": row[3].isoformat()}
+        for row in db.execute(select(ranked).where(ranked.c.rank == 1)).all()
+    }
+
     rows: list[dict[str, Any]] = []
     for agent in agents:
-        spend = int(
-            db.scalar(
-                select(func.coalesce(func.sum(SpendEvent.amount_minor), 0)).where(
-                    SpendEvent.agent_id == agent.agent_id, SpendEvent.occurred_at >= since
-                )
-            )
-            or 0
-        )
-        count = int(
-            db.scalar(
-                select(func.count(SpendEvent.id)).where(
-                    SpendEvent.agent_id == agent.agent_id, SpendEvent.occurred_at >= since
-                )
-            )
-            or 0
-        )
-        mandates = list(
-            db.scalars(
-                select(OpenMandate).where(
-                    OpenMandate.agent_id == agent.agent_id, OpenMandate.revoked_at.is_(None)
-                )
-            ).all()
-        )
-        budget_total = sum(m.cap_minor or 0 for m in mandates)
-        budget_used = sum(m.committed_minor for m in mandates)
-        last = db.scalar(
-            select(VerdictRow)
-            .where(VerdictRow.agent_id == agent.agent_id)
-            .order_by(desc(VerdictRow.created_at))
-            .limit(1)
-        )
+        spend, count = spend_by_agent.get(agent.agent_id, (0, 0))
+        budget_total, budget_used, mandate_count = budget_by_agent.get(agent.agent_id, (0, 0, 0))
         rows.append(
             {
                 "agent_id": agent.agent_id,
@@ -156,17 +191,11 @@ def traffic(db: Annotated[Session, Depends(get_db)]) -> dict[str, Any]:
                 "budget_total": _amount(budget_total),
                 "budget_used": _amount(budget_used),
                 "budget_remaining": _amount(max(0, budget_total - budget_used)),
-                "open_mandates": len(mandates),
-                "last_verdict": None
-                if last is None
-                else {
-                    "decision": last.decision,
-                    "reason_code": last.reason_code,
-                    "at": last.created_at.isoformat(),
-                },
+                "open_mandates": mandate_count,
+                "last_verdict": last_by_agent.get(agent.agent_id),
             }
         )
-    return {"agents": rows}
+    return {"total": total, "limit": limit, "offset": offset, "agents": rows}
 
 
 @router.get("/verdicts")
@@ -219,19 +248,41 @@ def reason_codes() -> dict[str, Any]:
 
 
 @router.get("/mandates")
-def mandates(db: Annotated[Session, Depends(get_db)]) -> dict[str, Any]:
-    rows = list(db.scalars(select(OpenMandate).order_by(desc(OpenMandate.created_at))).all())
-    out: list[dict[str, Any]] = []
-    for mandate in rows:
-        reserved = int(
-            db.scalar(
-                select(func.coalesce(func.sum(BudgetReservation.amount_minor), 0)).where(
-                    BudgetReservation.mandate_id == mandate.id,
+def mandates(
+    db: Annotated[Session, Depends(get_db)],
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    """The open mandates in force, most recent first.
+
+    Reserved totals come from one grouped query over the page, not one per mandate.
+    """
+    total = int(db.scalar(select(func.count(OpenMandate.id))) or 0)
+    rows = list(
+        db.scalars(
+            select(OpenMandate).order_by(desc(OpenMandate.created_at)).limit(limit).offset(offset)
+        ).all()
+    )
+    reserved_by_mandate: dict[str, int] = {}
+    if rows:
+        reserved_by_mandate = {
+            row[0]: int(row[1] or 0)
+            for row in db.execute(
+                select(
+                    BudgetReservation.mandate_id,
+                    func.coalesce(func.sum(BudgetReservation.amount_minor), 0),
+                )
+                .where(
+                    BudgetReservation.mandate_id.in_([m.id for m in rows]),
                     BudgetReservation.status == ReservationStatus.RESERVED,
                 )
-            )
-            or 0
-        )
+                .group_by(BudgetReservation.mandate_id)
+            ).all()
+        }
+
+    out: list[dict[str, Any]] = []
+    for mandate in rows:
+        reserved = reserved_by_mandate.get(mandate.id, 0)
         out.append(
             {
                 "id": mandate.id,
@@ -256,7 +307,7 @@ def mandates(db: Annotated[Session, Depends(get_db)]) -> dict[str, Any]:
                 "created_at": mandate.created_at.isoformat(),
             }
         )
-    return {"mandates": out}
+    return {"total": total, "limit": limit, "offset": offset, "mandates": out}
 
 
 class RevokeRequest(BaseModel):
@@ -279,9 +330,29 @@ def revoke_mandate(
 
 
 @router.get("/agents")
-def agents(db: Annotated[Session, Depends(get_db)]) -> dict[str, Any]:
-    rows = list(db.scalars(select(AgentIdentity).order_by(AgentIdentity.agent_id)).all())
+def agents(
+    db: Annotated[Session, Depends(get_db)],
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    """Per-agent controls, most recently seen first.
+
+    Paged, because each row on the dashboard carries three interactive controls and rendering
+    every agent a busy merchant has ever seen is neither useful nor fast.
+    """
+    total = int(db.scalar(select(func.count(AgentIdentity.id))) or 0)
+    rows = list(
+        db.scalars(
+            select(AgentIdentity)
+            .order_by(desc(AgentIdentity.created_at))
+            .limit(limit)
+            .offset(offset)
+        ).all()
+    )
     return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
         "agents": [
             {
                 "agent_id": a.agent_id,
@@ -521,6 +592,62 @@ def checkouts(
                 "expires_at": c.expires_at.isoformat(),
             }
             for c in rows
+        ]
+    }
+
+
+@router.get("/catalog")
+def catalog_state(db: Annotated[Session, Depends(get_db)]) -> dict[str, Any]:
+    """Live stock and the purchase constraints the kernel gates on."""
+    from app.catalog import service as catalog
+
+    entries = catalog.browse(db, limit=200)
+    return {
+        "items": [
+            {
+                **entry.as_document(),
+                "stock_total": entry.product.stock_total,
+            }
+            for entry in entries
+        ]
+    }
+
+
+@router.post("/catalog/restock")
+def restock(db: Annotated[Session, Depends(get_db)]) -> dict[str, Any]:
+    """Put the shelves back to their seeded levels.
+
+    A real merchant receives deliveries, and a demonstration that cannot restock runs itself dry
+    after a few hundred agent purchases and then reports correct sold-out refusals as if they were
+    failures. This resets stock only; nothing about the verdicts, evidence or mandates is touched.
+    """
+    from app.db.bootstrap import seed_catalog
+
+    restocked = seed_catalog(db, replace=True)
+    return {"restocked": restocked}
+
+
+@router.get("/notifications")
+def notifications(db: Annotated[Session, Depends(get_db)]) -> dict[str, Any]:
+    """Every purchase receipt Dwarpal has attempted to deliver, successful or not."""
+    from app.connect.service import mask
+    from app.notify import service as receipts
+
+    return {
+        "notifications": [
+            {
+                "id": row.id,
+                "correlation_id": row.correlation_id,
+                "kind": row.kind,
+                "route": row.route,
+                "to": mask(row.to_number),
+                "status": row.status,
+                "provider_message_id": row.provider_message_id,
+                "error": row.error,
+                "summary": row.summary,
+                "created_at": row.created_at.isoformat(),
+            }
+            for row in receipts.recent(db, limit=100)
         ]
     }
 

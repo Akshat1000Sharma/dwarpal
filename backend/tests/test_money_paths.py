@@ -117,7 +117,7 @@ def test_a_retried_completion_does_not_charge_twice(seeded, gateway):
 
 def test_create_order_is_idempotent_for_one_checkout(seeded, gateway):
     db = seeded
-    quoted, presentation = _prepare(db, "dwc_order_once")
+    quoted, _presentation = _prepare(db, "dwc_order_once")
     verdict = record(
         db,
         allow(

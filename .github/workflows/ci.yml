@@ -75,16 +75,21 @@ jobs:
         run: ruff check app tests
 
       - name: Lint the standalone tooling
-        run: ruff check tools interop
+        run: ruff check tools interop scenarios
 
       - name: Run tests
         run: pytest -q
 
+      # The soak suite is deselected by default so the everyday run stays fast. SOAK_SCALE=ci
+      # runs the same cases at a bounded size, so the guarantees are still exercised here.
+      - name: Run the soak suite at CI scale
+        run: pytest -q -m soak
+        env:
+          SOAK_SCALE: ci
+
       - name: Generate the attack scorecard and dispute defence reports
         run: python -m app.cli reports
 
-      # The reports step commits its packets to a separate database, so the export names it.
-      # --min-packets makes an empty chain a failure: verifying nothing is not a pass.
       # The reports step commits its packets to a separate database, so the export names it.
       # --min-packets makes an empty chain a failure: verifying nothing is not a pass.
       - name: Verify the evidence chain with the application stopped
@@ -96,7 +101,6 @@ jobs:
             --jsonl reports/evidence.jsonl \
             --jwks reports/merchant_jwks.json \
             --min-packets 40
-            --min-packets 40
 
       - name: Upload conformance and scorecard reports
         if: always()
@@ -107,7 +111,7 @@ jobs:
           if-no-files-found: ignore
 
   interop:
-    name: AP2 interop (live merchant)
+    name: AP2 interop and scenario suite (live merchant)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -142,6 +146,8 @@ jobs:
       RAZORPAY_KEY_SECRET: ci-secret
       RAZORPAY_WEBHOOK_SECRET: ci-webhook-secret
       GEMINI_API_KEY: ci-gemini-key
+      META_ACCESS_TOKEN: ""
+      META_PHONE_NUMBER_ID: ""
       META_VERIFY_TOKEN: ci-verify-token
       META_APP_SECRET: ci-app-secret
       MERCHANT_API_TOKEN: ci-merchant-token
@@ -175,9 +181,20 @@ jobs:
       - name: Drive the AP2 scenarios against it
         run: python interop/run_interop.py --base http://127.0.0.1:8000
 
+      - name: Run the scenario suite against it
+        run: python scenarios/run_suite.py --base http://127.0.0.1:8000 --profile standard
+
       - name: Merchant log
         if: failure()
         run: cat /tmp/dwarpal.log
+
+      - name: Upload the scenario suite report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dwarpal-scenario-suite
+          path: backend/reports/
+          if-no-files-found: ignore
 
   frontend:
     name: Frontend (lint + build)

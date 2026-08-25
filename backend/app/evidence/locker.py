@@ -13,7 +13,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.ap2.jose import canonical_json, sha256_b64url, sign_jws
@@ -24,6 +25,23 @@ from app.keys import merchant_key
 from app.settings import settings
 
 GENESIS_HASH = "GENESIS"
+
+# A hash chain is serial by definition: every entry commits to the one before it, so two writers
+# choosing the same predecessor is the chain forking, not a contention problem to tune away.
+#
+# So appends are serialised by an advisory lock rather than raced and retried. Retrying was tried
+# first and is not good enough: under contention writers keep colliding, and an evidence packet
+# that was dropped after too many attempts is the one outcome this module exists to prevent.
+#
+# The lock is transaction-scoped, so it is held until the caller commits. That is only safe
+# because nothing slow happens after an append: the packet is the last thing written before a
+# checkout returns, and the WhatsApp receipt that used to sit here was moved off the request in
+# app/notify/service.py precisely so this lock is never held across a network call.
+_CHAIN_LOCK_KEY = 8_474_101_982_735_461
+
+# The lock makes a collision impossible in one process against one database. The retry stays as a
+# belt to its braces, because losing a packet is worse than a slow append.
+_APPEND_ATTEMPTS = 8
 
 
 def compute_entry_hash(
@@ -52,7 +70,29 @@ def next_sequence(session: Session) -> int:
 
 
 def append(session: Session, *, correlation_id: str, body: dict[str, Any]) -> EvidencePacket:
-    """Write one packet, chained to the current head and signed by the merchant key."""
+    """Write one packet, chained to the current head and signed by the merchant key.
+
+    Two concurrent checkouts read the same head, compute the same sequence number and the same
+    prev_hash, and one of them loses on the primary key. Losing is correct: it is what stops the
+    chain forking. What must not happen is the loser answering the agent with a 500 and no packet
+    filed, so the attempt is repeated against a freshly read head until it wins.
+    """
+    session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _CHAIN_LOCK_KEY})
+    last: IntegrityError | None = None
+    for _attempt in range(_APPEND_ATTEMPTS):
+        try:
+            with session.begin_nested():
+                return _write(session, correlation_id=correlation_id, body=body)
+        except IntegrityError as exc:
+            # Another writer took this sequence number. The savepoint is gone and the outer
+            # transaction is intact, so the next read sees their committed row.
+            last = exc
+    raise RuntimeError(
+        f"could not append an evidence packet after {_APPEND_ATTEMPTS} attempts"
+    ) from last
+
+
+def _write(session: Session, *, correlation_id: str, body: dict[str, Any]) -> EvidencePacket:
     previous = head(session)
     prev_hash = previous.entry_hash if previous is not None else GENESIS_HASH
     seq = (previous.seq + 1) if previous is not None else 1

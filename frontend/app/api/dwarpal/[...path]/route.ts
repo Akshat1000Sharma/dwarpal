@@ -12,7 +12,13 @@ import { backendOrigin, merchantToken } from "@/lib/backend";
  * origin.
  */
 
-const ALLOWED_PREFIXES = ["merchant/", "health"];
+// The buyer console polls its run log from the browser, so its surface is proxied too. The agent
+// endpoints are still not: an agent transacts against the backend directly and must not be able
+// to reach it through the dashboard's origin.
+const ALLOWED_PREFIXES = ["merchant/", "buyer/"];
+// Exact paths, not prefixes: "health" as a prefix would also admit healthz and anything
+// else beginning with those characters.
+const ALLOWED_EXACT = ["health"];
 
 function permitted(path: string[]): boolean {
   // A prefix test alone is not enough. A segment that decodes to a slash or to a dot segment is
@@ -30,7 +36,8 @@ function permitted(path: string[]): boolean {
     }
   }
   const joined = path.join("/");
-  return ALLOWED_PREFIXES.some((prefix) => joined === prefix || joined.startsWith(prefix));
+  if (ALLOWED_EXACT.includes(joined)) return true;
+  return ALLOWED_PREFIXES.some((prefix) => joined.startsWith(prefix));
 }
 
 async function forward(request: NextRequest, path: string[]): Promise<Response> {

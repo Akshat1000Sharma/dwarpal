@@ -2,14 +2,15 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Dwarpal merchant dashboard",
+    name: "Dwarpal",
     short_name: "Dwarpal",
     description:
-      "The merchant's view of agent traffic, policy verdicts, mandates, evidence and disputes.",
+      "The AP2 merchant endpoint for Razorpay: the gate that decides whether an agent was "
+      + "allowed to spend, and the evidence that proves it afterwards.",
     start_url: "/",
     display: "standalone",
-    background_color: "#071121",
-    theme_color: "#071121",
+    background_color: "#ffffff",
+    theme_color: "#ffffff",
     icons: [
       { src: "/icon-192x192.png", sizes: "192x192", type: "image/png" },
       { src: "/icon-512x512.png", sizes: "512x512", type: "image/png" },

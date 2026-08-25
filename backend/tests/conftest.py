@@ -21,6 +21,17 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 
+# Settings the suite decides, whatever a developer's .env or the shell says. These are not
+# preferences: APP_ENV=testing is what selects the recording WhatsApp transport, the deterministic
+# buyer planner and the stub payment gateway, so a local .env carrying APP_ENV=development would
+# quietly point the suite at Meta, Gemini and Razorpay. The signing key directory is forced for the
+# same reason, so a test run cannot mint keys into the directory a real deployment is using.
+FORCED = {
+    "APP_ENV": "testing",
+    "MERCHANT_SIGNING_KEY_DIR": "./secrets/merchant_keys_test",
+}
+
+
 def _bootstrap_environment() -> None:
     """Fill in placeholders before any application module reads configuration."""
     from dotenv import load_dotenv
@@ -28,7 +39,6 @@ def _bootstrap_environment() -> None:
     load_dotenv(BACKEND_ROOT / ".env", override=False)
 
     defaults = {
-        "APP_ENV": "testing",
         "LOG_LEVEL": "WARNING",
         "SECRET_KEY": "test-secret-key-for-local-and-ci-use-only",
         "PUBLIC_BASE_URL": "http://localhost:8000",
@@ -49,11 +59,11 @@ def _bootstrap_environment() -> None:
         "ESCALATION_HUMAN_WHATSAPP": "+10000000000",
         "MERCHANT_API_TOKEN": "test-merchant-token",
         "MERCHANT_KEY_ID": "dwarpal-merchant-test",
-        "MERCHANT_SIGNING_KEY_DIR": "./secrets/merchant_keys_test",
         "TRUST_REGISTRY_PATH": "./config/trust_registry.json",
     }
     for key, value in defaults.items():
         os.environ.setdefault(key, value)
+    os.environ.update(FORCED)
 
     # Never point the suite at a development database.
     name = os.environ["DB_NAME"]
@@ -114,6 +124,10 @@ def database() -> Iterator[None]:
 
 
 TABLES_IN_TRUNCATION_ORDER = [
+    "buyer_run_events",
+    "buyer_runs",
+    "notification_log",
+    "agent_connections",
     "evidence_packets",
     "escalation_responses",
     "escalations",
@@ -195,3 +209,4 @@ def whatsapp() -> object:
     from app.escalation.whatsapp import RecordingTransport
 
     return RecordingTransport()
+

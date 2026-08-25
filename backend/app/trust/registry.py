@@ -7,6 +7,10 @@ change. A malformed registry stops the process rather than degrading silently at
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+import threading
+import time
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -15,6 +19,11 @@ from typing import Any
 from app.settings import settings
 
 UNVERIFIED_TIER = "unverified"
+
+# Publishing is a read-modify-write of a shared file. Several agents minting identities at the
+# same time would otherwise each read the same set of keys and each write back their own, so all
+# but the last one would vanish and the merchant would refuse their credentials as unsigned.
+_PUBLISH_LOCK = threading.Lock()
 
 
 class TrustRegistryError(RuntimeError):
@@ -57,22 +66,43 @@ class Authority:
         The file is read on each call rather than cached, so an authority that rotates or adds a
         key does not need the merchant restarted. Adding the authority itself is still a
         configuration change.
+
+        The read is retried because an authority publishing a key replaces this file, and Windows
+        refuses a reader for the moment the swap takes. Answering that with a 500, or silently
+        with a short key set, would both surface as a genuine credential being refused.
         """
         keys = list(self.jwks)
         if not self.jwks_path:
             return keys
         path = settings.resolve(self.jwks_path)
-        if not path.exists():
-            return keys
-        try:
-            document = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
+        document = _read_json(path)
+        if document is None:
             return keys
         published = document.get("keys", document) if isinstance(document, dict) else document
         for key in published if isinstance(published, list) else []:
             if isinstance(key, dict) and key not in keys:
                 keys.append(key)
         return keys
+
+
+def _read_json(path: Path, attempts: int = 20) -> Any:
+    """Read a JSON file that another process may be replacing right now.
+
+    Returns None when the file is absent or unreadable after every attempt, which the caller
+    treats as "this authority has published nothing", never as "this signature is forged".
+    """
+    for attempt in range(attempts):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except json.JSONDecodeError:
+            return None
+        except OSError:
+            if attempt == attempts - 1:
+                return None
+            time.sleep(0.01 * (attempt + 1))
+    return None
 
 
 @dataclass(frozen=True)
@@ -214,14 +244,52 @@ def publish_key(issuer_id: str, jwk: dict[str, Any]) -> Path:
         raise TrustRegistryError(f"{issuer_id!r} declares no jwks_path to publish into")
     path = settings.resolve(authority.jwks_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    existing: list[dict[str, Any]] = []
-    if path.exists():
-        try:
-            document = json.loads(path.read_text(encoding="utf-8"))
-            existing = document.get("keys", []) if isinstance(document, dict) else list(document)
-        except json.JSONDecodeError:
-            existing = []
-    if jwk not in existing:
-        existing.append(jwk)
-    path.write_text(json.dumps({"keys": existing}, indent=2), encoding="utf-8")
+    with _PUBLISH_LOCK:
+        existing: list[dict[str, Any]] = []
+        if path.exists():
+            try:
+                document = json.loads(path.read_text(encoding="utf-8"))
+                existing = (
+                    document.get("keys", []) if isinstance(document, dict) else list(document)
+                )
+            except json.JSONDecodeError:
+                existing = []
+        if jwk not in existing:
+            existing.append(jwk)
+        _write_atomically(path, {"keys": existing})
     return path
+
+
+def _write_atomically(path: Path, document: dict[str, Any]) -> None:
+    """Replace the file in one step, so a reader never sees a half-written JWKS.
+
+    The merchant reads this file on every verification, and a truncated read would present as a
+    forged signature rather than as the file-system race it actually is.
+    """
+    descriptor, temporary = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(document, handle, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _replace_with_retry(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+
+
+def _replace_with_retry(temporary: str, path: Path, attempts: int = 20) -> None:
+    """os.replace, retried, because Windows refuses it while another process has the file open.
+
+    The merchant reads this file on every verification, so a reader holding it for the microsecond
+    the swap needs is normal rather than exceptional. POSIX replaces regardless; Windows raises
+    PermissionError, and giving up would drop a key an agent is about to present.
+    """
+    for attempt in range(attempts):
+        try:
+            os.replace(temporary, path)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.01 * (attempt + 1))

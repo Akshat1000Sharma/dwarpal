@@ -3,6 +3,8 @@
     "sku": "DWP-TEA-001",
     "title": "Nilgiri Black Tea 250g",
     "description": "Loose leaf black tea from the Nilgiri hills. Vacuum sealed, shelf stable.",
+    "image_url": "/catalog/DWP-TEA-001.jpg",
+    "image_alt": "Loose black tea leaves",
     "category": "grocery",
     "price_minor": 45000,
     "currency": "INR",
@@ -14,12 +16,17 @@
     "age_restricted": false,
     "region_lock": [],
     "perishable": false,
-    "attributes": {"weight_grams": 250, "vegetarian": true}
+    "attributes": {
+      "weight_grams": 250,
+      "vegetarian": true
+    }
   },
   {
     "sku": "DWP-COF-002",
     "title": "Single Origin Coffee Beans 500g",
     "description": "Medium roast arabica from Chikmagalur. Whole bean, resealable bag.",
+    "image_url": "/catalog/DWP-COF-002.jpg",
+    "image_alt": "Roasted coffee beans",
     "category": "grocery",
     "price_minor": 89000,
     "currency": "INR",
@@ -31,12 +38,17 @@
     "age_restricted": false,
     "region_lock": [],
     "perishable": false,
-    "attributes": {"weight_grams": 500, "roast": "medium"}
+    "attributes": {
+      "weight_grams": 500,
+      "roast": "medium"
+    }
   },
   {
     "sku": "DWP-MLK-003",
     "title": "Fresh Paneer 400g",
     "description": "Chilled fresh paneer. Requires refrigeration and must be consumed within four days.",
+    "image_url": "/catalog/DWP-MLK-003.jpg",
+    "image_alt": "Fresh paneer draining in a sieve",
     "category": "grocery",
     "price_minor": 22000,
     "currency": "INR",
@@ -48,12 +60,17 @@
     "age_restricted": false,
     "region_lock": [],
     "perishable": true,
-    "attributes": {"weight_grams": 400, "cold_chain": true}
+    "attributes": {
+      "weight_grams": 400,
+      "cold_chain": true
+    }
   },
   {
     "sku": "DWP-MNG-004",
     "title": "Alphonso Mangoes 1kg",
     "description": "Seasonal Ratnagiri Alphonso mangoes, ripened naturally. Highly perishable.",
+    "image_url": "/catalog/DWP-MNG-004.jpg",
+    "image_alt": "Ripe Alphonso mangoes",
     "category": "grocery",
     "price_minor": 120000,
     "currency": "INR",
@@ -65,12 +82,17 @@
     "age_restricted": false,
     "region_lock": [],
     "perishable": true,
-    "attributes": {"weight_grams": 1000, "seasonal": true}
+    "attributes": {
+      "weight_grams": 1000,
+      "seasonal": true
+    }
   },
   {
     "sku": "DWP-WIN-005",
     "title": "Sula Cabernet Shiraz 750ml",
     "description": "Red wine from Nashik. Sale restricted to buyers of legal drinking age.",
+    "image_url": "/catalog/DWP-WIN-005.jpg",
+    "image_alt": "A bottle and glass of red wine",
     "category": "alcohol",
     "price_minor": 95000,
     "currency": "INR",
@@ -80,14 +102,24 @@
     "returnable": false,
     "return_window_days": 0,
     "age_restricted": true,
-    "region_lock": ["GJ", "BR", "MN", "NL"],
+    "region_lock": [
+      "GJ",
+      "BR",
+      "MN",
+      "NL"
+    ],
     "perishable": false,
-    "attributes": {"volume_ml": 750, "abv_percent": 13.5}
+    "attributes": {
+      "volume_ml": 750,
+      "abv_percent": 13.5
+    }
   },
   {
     "sku": "DWP-KNF-006",
     "title": "Chef Knife 8 inch",
     "description": "High carbon stainless steel chef knife with a full tang handle.",
+    "image_url": "/catalog/DWP-KNF-006.jpg",
+    "image_alt": "Chef's knives",
     "category": "restricted-blades",
     "price_minor": 260000,
     "currency": "INR",
@@ -99,12 +131,16 @@
     "age_restricted": true,
     "region_lock": [],
     "perishable": false,
-    "attributes": {"blade_length_mm": 203}
+    "attributes": {
+      "blade_length_mm": 203
+    }
   },
   {
     "sku": "DWP-HDP-007",
     "title": "Wireless Headphones",
     "description": "Over-ear active noise cancelling headphones with a 30 hour battery.",
+    "image_url": "/catalog/DWP-HDP-007.jpg",
+    "image_alt": "Over-ear wireless headphones",
     "category": "electronics",
     "price_minor": 1299000,
     "currency": "INR",
@@ -116,12 +152,17 @@
     "age_restricted": false,
     "region_lock": [],
     "perishable": false,
-    "attributes": {"battery_hours": 30, "warranty_months": 12}
+    "attributes": {
+      "battery_hours": 30,
+      "warranty_months": 12
+    }
   },
   {
     "sku": "DWP-KBD-008",
     "title": "Mechanical Keyboard 75 percent",
     "description": "Hot swappable 75 percent mechanical keyboard with PBT keycaps.",
+    "image_url": "/catalog/DWP-KBD-008.jpg",
+    "image_alt": "A mechanical keyboard",
     "category": "electronics",
     "price_minor": 749000,
     "currency": "INR",
@@ -133,12 +174,17 @@
     "age_restricted": false,
     "region_lock": [],
     "perishable": false,
-    "attributes": {"switch": "tactile", "warranty_months": 12}
+    "attributes": {
+      "switch": "tactile",
+      "warranty_months": 12
+    }
   },
   {
     "sku": "DWP-LMP-009",
     "title": "Desk Lamp with Dimmer",
     "description": "Adjustable LED desk lamp with a stepless dimmer and USB charging port.",
+    "image_url": "/catalog/DWP-LMP-009.jpg",
+    "image_alt": "An adjustable desk lamp",
     "category": "home",
     "price_minor": 189000,
     "currency": "INR",
@@ -150,12 +196,16 @@
     "age_restricted": false,
     "region_lock": [],
     "perishable": false,
-    "attributes": {"colour_temperature_k": "2700-6500"}
+    "attributes": {
+      "colour_temperature_k": "2700-6500"
+    }
   },
   {
     "sku": "DWP-LMP-010",
     "title": "Desk Lamp Compact",
     "description": "Compact LED desk lamp with a fixed warm colour temperature. Substitute for the dimmable model.",
+    "image_url": "/catalog/DWP-LMP-010.jpg",
+    "image_alt": "A compact desk lamp",
     "category": "home",
     "price_minor": 149000,
     "currency": "INR",
@@ -167,12 +217,17 @@
     "age_restricted": false,
     "region_lock": [],
     "perishable": false,
-    "attributes": {"colour_temperature_k": "3000", "substitute_for": "DWP-LMP-009"}
+    "attributes": {
+      "colour_temperature_k": "3000",
+      "substitute_for": "DWP-LMP-009"
+    }
   },
   {
     "sku": "DWP-NTB-011",
     "title": "Hardcover Notebook A5",
     "description": "A5 hardcover notebook, 200 pages of 100gsm dot grid paper.",
+    "image_url": "/catalog/DWP-NTB-011.jpg",
+    "image_alt": "A hardcover notebook on a desk",
     "category": "stationery",
     "price_minor": 65000,
     "currency": "INR",
@@ -184,12 +239,17 @@
     "age_restricted": false,
     "region_lock": [],
     "perishable": false,
-    "attributes": {"pages": 200, "gsm": 100}
+    "attributes": {
+      "pages": 200,
+      "gsm": 100
+    }
   },
   {
     "sku": "DWP-PEN-012",
     "title": "Fountain Pen Medium Nib",
     "description": "Brass bodied fountain pen with a medium steel nib and a converter.",
+    "image_url": "/catalog/DWP-PEN-012.jpg",
+    "image_alt": "A fountain pen nib",
     "category": "stationery",
     "price_minor": 210000,
     "currency": "INR",
@@ -201,6 +261,8 @@
     "age_restricted": false,
     "region_lock": [],
     "perishable": false,
-    "attributes": {"nib": "medium"}
+    "attributes": {
+      "nib": "medium"
+    }
   }
 ]

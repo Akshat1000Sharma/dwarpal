@@ -1,6 +1,5 @@
 {
-  "name": "frontend",
-  "version": "0.1.0",
+  "name": "dwarpal-frontend",
   "private": true,
   "scripts": {
     "dev": "next dev",

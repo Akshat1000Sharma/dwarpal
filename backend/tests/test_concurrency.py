@@ -154,6 +154,95 @@ def test_the_naive_implementation_demonstrably_breaches_the_cap(db):
     )
 
 
+def _draw_like_a_checkout(mandate_id: str, amount_minor: int) -> bool:
+    """Reserve the way a real checkout does: with the mandate already loaded in this session.
+
+    This is the distinction that matters. `_locked_reserve` starts from an empty session, so the
+    FOR UPDATE read is the first time that row is seen and is necessarily fresh. A real checkout
+    has already loaded the mandate before it reaches the kernel, because it had to look it up to
+    know which mandate this credential belongs to. If the locked read is then allowed to return
+    the copy already in the session, the lock serialises correctly and the balance is still read
+    from before every other session's spend.
+    """
+    session = db_base.SessionFactory()
+    try:
+        preloaded = session.get(OpenMandate, mandate_id)
+        assert preloaded is not None
+        # Verification, the kernel's earlier steps and the gateway call all happen between the
+        # lookup and the reservation in a real checkout. The wait stands in for them, so the
+        # window this test needs is the window the application actually has.
+        threading.Event().wait(0.01)
+        reservation = budget.reserve(session, mandate_id, amount_minor, "checkout-like")
+        # Settle in the same transaction, which is what an inline capture does. This is what turns
+        # a stale read into a breach: the spend moves from the reservation table, which is always
+        # read fresh, onto the mandate row, which is the thing being cached.
+        budget.commit(session, reservation.id)
+        session.commit()
+        return True
+    except budget.BudgetExceeded:
+        session.rollback()
+        return False
+    except Exception:
+        session.rollback()
+        return False
+    finally:
+        session.close()
+
+
+def test_the_cap_holds_when_the_mandate_was_already_loaded(db):
+    """Regression: a locked read that returns a cached row is not a locked read.
+
+    Found by the scenario suite, not by the fuzz above, because the fuzz reserved from a fresh
+    session every time and a real checkout never does.
+    """
+    mandate_id = _make_mandate(db)
+    granted = _run_concurrently(_draw_like_a_checkout, mandate_id)
+
+    committed = int(
+        db.scalar(
+            select(func.coalesce(func.sum(OpenMandate.committed_minor), 0)).where(
+                OpenMandate.id == mandate_id
+            )
+        )
+        or 0
+    )
+    assert committed <= CAP_MINOR, f"cap breached: {committed} > {CAP_MINOR}"
+    assert granted == CAP_MINOR // DRAW_MINOR, (
+        f"expected exactly {CAP_MINOR // DRAW_MINOR} draws to succeed, got {granted}"
+    )
+
+
+def test_the_kernel_takes_its_locked_reads_with_a_refresh(db):
+    """Guard the fix itself, so it cannot be quietly optimised away.
+
+    budget._lock_mandate is the only place the mandate balance is read before money is allowed to
+    move. The regression test above proves the behaviour; this proves the mechanism is still the
+    one that produces it.
+    """
+    mandate_id = _make_mandate(db)
+    other = db_base.SessionFactory()
+    try:
+        assert other.get(OpenMandate, mandate_id) is not None
+
+        spender = db_base.SessionFactory()
+        try:
+            row = spender.get(OpenMandate, mandate_id, populate_existing=True)
+            assert row is not None
+            row.committed_minor = CAP_MINOR
+            spender.commit()
+        finally:
+            spender.close()
+
+        locked = budget._lock_mandate(other, mandate_id)
+        assert locked is not None
+        assert locked.committed_minor == CAP_MINOR, (
+            "budget._lock_mandate returned a stale balance; the FOR UPDATE read must refresh"
+        )
+    finally:
+        other.rollback()
+        other.close()
+
+
 def test_reservations_expire_so_an_abandoned_attempt_frees_budget(db):
     mandate_id = _make_mandate(db)
     reservation = budget.reserve(db, mandate_id, CAP_MINOR, "abandoned", ttl_seconds=-1)

@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import agent, merchant, webhooks
+from app.api import agent, buyer, connect, merchant, webhooks
 from app.correlation import HEADER, new_correlation_id, set_correlation_id
 from app.db.base import session_scope
 from app.errors import AgentError, agent_error_handler, unhandled_error_handler
@@ -91,7 +91,6 @@ def create_app() -> FastAPI:
     application = FastAPI(
         title="Dwarpal",
         description="The AP2 merchant endpoint for Razorpay.",
-        version="1.0.0",
         lifespan=lifespan,
     )
 
@@ -122,10 +121,27 @@ def create_app() -> FastAPI:
     application.include_router(agent.router)
     application.include_router(webhooks.router)
     application.include_router(merchant.router)
+    application.include_router(connect.router)
+    application.include_router(buyer.router)
 
     @application.get("/health", tags=["ops"])
     def health() -> dict[str, str]:
-        return {"status": "ok", "merchant": settings.MERCHANT_ID}
+        """Liveness, plus which outbound channels are real on this process.
+
+        The channel modes are here so a load generator can refuse to point traffic at a merchant
+        that would send real WhatsApp messages and make real gateway calls. That mistake is
+        cheap to make and expensive to undo, so it is answered before anything is driven rather
+        than discovered afterwards in somebody's message history.
+        """
+        from app.payments.gateway import live_gateway_configured
+
+        return {
+            "status": "ok",
+            "merchant": settings.MERCHANT_ID,
+            "environment": settings.APP_ENV,
+            "whatsapp": "recording" if settings.APP_ENV == "testing" else "live",
+            "gateway": "razorpay" if live_gateway_configured() else "stub",
+        }
 
     return application
 

@@ -58,12 +58,36 @@ class InboundAnswer:
     raw_text: str = ""
 
 
-def parse_inbound(payload: dict[str, Any]) -> list[InboundAnswer]:
-    """Pull button replies and text replies out of a verified webhook payload."""
+def numbers_in(payload: dict[str, Any]) -> set[str]:
+    """Every phone number id this payload carries events for."""
+    found: set[str] = set()
+    for entry in payload.get("entry", []) or []:
+        for change in entry.get("changes", []) or []:
+            value = change.get("value") or {}
+            number = str((value.get("metadata") or {}).get("phone_number_id") or "")
+            if number:
+                found.add(number)
+    return found
+
+
+def parse_inbound(
+    payload: dict[str, Any], *, phone_number_id: str | None = None
+) -> list[InboundAnswer]:
+    """Pull button replies and text replies out of a verified webhook payload.
+
+    Only events for this merchant's own phone number are read. A WhatsApp Business Account can
+    hold several numbers, and a subscription is made at the account level, so every app subscribed
+    to the account receives every number's events. Acting on another number's traffic would mean
+    settling escalations from replies sent to somebody else's product.
+    """
+    expected = phone_number_id if phone_number_id is not None else settings.META_PHONE_NUMBER_ID
     answers: list[InboundAnswer] = []
     for entry in payload.get("entry", []) or []:
         for change in entry.get("changes", []) or []:
             value = change.get("value") or {}
+            arrived_on = str((value.get("metadata") or {}).get("phone_number_id") or "")
+            if expected and arrived_on and arrived_on != expected:
+                continue
             for message in value.get("messages", []) or []:
                 message_id = message.get("id")
                 sender = message.get("from")

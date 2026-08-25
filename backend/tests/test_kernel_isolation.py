@@ -21,6 +21,10 @@ KERNEL_ROOT = APP_ROOT / "kernel"
 BANNED_PREFIXES: tuple[str, ...] = (
     "app.semantic",
     "app.escalation",
+    # The buyer's agent is model-driven on purpose. It is the other side of the counter and must
+    # stay there: a money decision must never be able to reach it.
+    "app.buyer",
+    "app.notify",
     "google",
     "google.genai",
     "google.generativeai",
@@ -135,7 +139,7 @@ def test_kernel_reaches_its_legitimate_dependencies() -> None:
     assert "app.ap2.constraints" in reached
 
 
-@pytest.mark.parametrize("banned", ["google.genai", "httpx", "app.semantic"])
+@pytest.mark.parametrize("banned", ["google.genai", "httpx", "app.semantic", "app.buyer"])
 def test_specific_clients_are_unreachable(banned: str) -> None:
     reached = _closure(sorted(KERNEL_ROOT.glob("*.py")))
     assert banned not in reached, f"{banned} must not be reachable from the policy kernel"

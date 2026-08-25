@@ -7,6 +7,7 @@
     python -m app.cli export-jwks       write the merchant public JWK Set
     python -m app.cli verify-chain      in-process chain check
     python -m app.cli seed              create the schema and seed the catalog
+    python -m app.cli check-channels    confirm the outbound channels are actually configured
 """
 
 from __future__ import annotations
@@ -68,6 +69,7 @@ def _fresh_session(database: str):
     create_schema(engine)
 
     tables = [
+        "buyer_run_events", "buyer_runs", "notification_log", "agent_connections",
         "evidence_packets", "escalation_responses", "escalations", "refunds",
         "payment_exceptions", "payments", "verdicts", "spend_events",
         "budget_reservations", "inventory_holds", "credential_nonces",
@@ -189,6 +191,26 @@ def cmd_seed(_: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_check_channels(args: argparse.Namespace) -> int:
+    """Ask the gateways whether they would work, without sending anything."""
+    from app.channels import run
+
+    del args
+    report = run()
+    for check in report.checks:
+        mark = "ok  " if check.ok else "FAIL"
+        print(f"  [{mark}] {check.name}")
+        print(f"         {check.detail}")
+        if not check.ok and check.fix:
+            print(f"         fix: {check.fix}")
+    print()
+    if report.failures:
+        print(f"{len(report.failures)} of {len(report.checks)} checks failed")
+        return 1
+    print(f"all {len(report.checks)} checks passed")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli", description="Dwarpal utilities.")
     parser.add_argument(
@@ -208,6 +230,9 @@ def main(argv: list[str] | None = None) -> int:
         fn=cmd_verify_chain
     )
     sub.add_parser("seed", help="create the schema and seed the catalog").set_defaults(fn=cmd_seed)
+    sub.add_parser(
+        "check-channels", help="confirm Razorpay and WhatsApp are configured, sending nothing"
+    ).set_defaults(fn=cmd_check_channels)
 
     export = sub.add_parser("export-evidence", help="write the evidence chain as JSONL")
     export.add_argument("--out", default="./reports/evidence.jsonl")

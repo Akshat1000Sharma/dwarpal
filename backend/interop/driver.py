@@ -349,7 +349,7 @@ def scenario_unverified_challenge(client: Client) -> ScenarioOutcome:
     )
     outcome.add("browsing allowed without credentials", status == 200)
 
-    status, quoted = client.post(
+    status, _quoted = client.post(
         "/checkout/quote",
         {"items": [{"sku": "DWP-HDP-007", "quantity": 1}]},
         headers={"X-Agent-Id": f"agent:anonymous-{RUN_ID}"},

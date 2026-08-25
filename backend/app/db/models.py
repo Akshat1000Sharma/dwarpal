@@ -90,6 +90,41 @@ class DisputeOutcome(StrEnum):
     REFUNDED = "refunded"
 
 
+class ConnectionScope(StrEnum):
+    """Which surface a connection token addresses.
+
+    A buyer connection lets somebody's own agent shop here; a merchant connection lets it run the
+    shop. Neither carries purchasing authority, which stays with the credential chain.
+    """
+
+    BUYER = "buyer"
+    MERCHANT = "merchant"
+
+
+class NotificationKind(StrEnum):
+    PURCHASE_COMPLETED = "purchase_completed"
+    PURCHASE_REFUSED = "purchase_refused"
+    PURCHASE_COMPENSATED = "purchase_compensated"
+
+
+class NotificationStatus(StrEnum):
+    SENT = "sent"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class BuyerRunStatus(StrEnum):
+    PLANNING = "planning"
+    QUOTING = "quoting"
+    PRESENTING = "presenting"
+    AWAITING_PAYMENT = "awaiting_payment"
+    COMPLETED = "completed"
+    REFUSED = "refused"
+    ESCALATED = "escalated"
+    COMPENSATED = "compensated"
+    ERROR = "error"
+
+
 class Product(Base):
     """A catalog item with machine-readable purchase constraints and live stock."""
 
@@ -99,6 +134,11 @@ class Product(Base):
     sku: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     title: Mapped[str] = mapped_column(String(256))
     description: Mapped[str] = mapped_column(Text, default="")
+    # What an agent or a person is shown. Part of the item's public description, so it is carried
+    # into the evidence packet's catalog snapshot along with the price: reconstructing what the
+    # buyer was shown means the picture too, not only the number.
+    image_url: Mapped[str] = mapped_column(Text, default="")
+    image_alt: Mapped[str] = mapped_column(String(256), default="")
     category: Mapped[str] = mapped_column(String(64), index=True)
     price_minor: Mapped[int] = mapped_column(Integer)
     currency: Mapped[str] = mapped_column(String(3), default="INR")
@@ -445,3 +485,96 @@ class Dispute(Base):
     decided_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 
     __table_args__ = (UniqueConstraint("correlation_id", "claimed_at", name="uq_dispute_claim"),)
+
+
+class AgentConnection(Base):
+    """A connection somebody creates so their own agent can transact here.
+
+    Only the token's digest is stored, so a leaked database row cannot be replayed as a token. The
+    scope decides which surface the token addresses; it never confers purchasing authority, which
+    comes from the credential chain alone.
+    """
+
+    __tablename__ = "agent_connections"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    label: Mapped[str] = mapped_column(String(120))
+    scope: Mapped[str] = mapped_column(String(16), default=ConnectionScope.BUYER, index=True)
+    agent_id: Mapped[str] = mapped_column(String(128), index=True)
+    whatsapp_e164: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    token_prefix: Mapped[str] = mapped_column(String(16))
+    notify_completed: Mapped[bool] = mapped_column(Boolean, default=True)
+    notify_refused: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+    @property
+    def live(self) -> bool:
+        return self.revoked_at is None
+
+
+class NotificationLog(Base):
+    """Every outbound purchase receipt attempt, delivered or not.
+
+    A delivery failure is recorded rather than retried into silence: the human not hearing about a
+    purchase is itself a fact the merchant should be able to show.
+    """
+
+    __tablename__ = "notification_log"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    correlation_id: Mapped[str] = mapped_column(String(64), index=True)
+    connection_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    channel: Mapped[str] = mapped_column(String(16), default="whatsapp")
+    route: Mapped[str] = mapped_column(String(64), default="interactive")
+    to_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    provider_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
+
+
+class BuyerRun(Base):
+    """One buyer-console purchase attempt, from natural-language prompt to recorded outcome."""
+
+    __tablename__ = "buyer_runs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    prompt: Mapped[str] = mapped_column(Text)
+    planner: Mapped[str] = mapped_column(String(32), default="rule-based")
+    agent_id: Mapped[str] = mapped_column(String(128), index=True)
+    connection_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default=BuyerRunStatus.PLANNING, index=True)
+    correlation_id: Mapped[str] = mapped_column(String(64), index=True)
+    checkout_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    payment_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    razorpay_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reason_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    evidence_packet_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    amount_minor: Mapped[int] = mapped_column(BigInteger, default=0)
+    currency: Mapped[str] = mapped_column(String(3), default="INR")
+    plan: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+
+class BuyerRunEvent(Base):
+    """One line of the buyer agent's log, as the console renders it live."""
+
+    __tablename__ = "buyer_run_events"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_uuid)
+    run_id: Mapped[str] = mapped_column(String(64), index=True)
+    seq: Mapped[int] = mapped_column(Integer)
+    level: Mapped[str] = mapped_column(String(8), default="info")
+    step: Mapped[str] = mapped_column(String(48))
+    message: Mapped[str] = mapped_column(Text)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
+
+    __table_args__ = (UniqueConstraint("run_id", "seq", name="uq_buyer_run_event_seq"),)

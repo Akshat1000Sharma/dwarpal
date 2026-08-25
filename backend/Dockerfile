@@ -18,6 +18,7 @@ RUN pip install --upgrade pip && pip install -r requirements.txt \
 COPY app ./app
 COPY config ./config
 COPY interop ./interop
+COPY scenarios ./scenarios
 COPY tools ./tools
 COPY main.py pyproject.toml ./
 

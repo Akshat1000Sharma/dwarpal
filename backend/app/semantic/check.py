@@ -30,7 +30,7 @@ from app.semantic.prompt import SYSTEM_INSTRUCTION, build_user_prompt
 logger = get_logger(__name__)
 
 
-class Verdict(str, enum.Enum):
+class Verdict(enum.StrEnum):
     """The only two values the model is permitted to emit."""
 
     VIOLATES = "violates"

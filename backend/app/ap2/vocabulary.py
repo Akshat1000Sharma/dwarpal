@@ -23,7 +23,12 @@ POLICY_TERMS_JWT_TYP = "dwarpal-policy+jwt"
 
 
 class Vct(StrEnum):
-    """Verifiable Credential Type claim values."""
+    """Verifiable Credential Type claim values.
+
+    The trailing digit is not a Dwarpal version number and must not be stripped. Each value is
+    pinned by ``const`` in the vendored schema for that credential under ``schemas/ap2/``, so a
+    credential carrying a shortened vct fails validation on issue and on accept.
+    """
 
     OPEN_CHECKOUT_MANDATE = "mandate.checkout.open.1"
     CLOSED_CHECKOUT_MANDATE = "mandate.checkout.1"

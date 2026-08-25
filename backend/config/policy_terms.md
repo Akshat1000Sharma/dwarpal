@@ -1,6 +1,6 @@
 # Dwarpal Merchant Policy Terms
 
-Version 1. These terms govern purchases made by an autonomous agent on behalf of a human
+These terms govern purchases made by an autonomous agent on behalf of a human
 principal. An agent must acknowledge the content hash of the terms that were live when its cart
 was quoted. A checkout presenting any other hash is refused.
 

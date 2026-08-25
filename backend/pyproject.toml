@@ -1,9 +1,3 @@
-[project]
-name = "dwarpal-backend"
-version = "1.0.0"
-description = "AP2 merchant endpoint for Razorpay"
-requires-python = ">=3.12"
-
 [tool.ruff]
 line-length = 100
 target-version = "py312"
@@ -18,8 +12,11 @@ ignore = ["B008", "RUF012"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --strict-markers"
+# The soak suite is deselected by default so the everyday run stays fast. A command line -m is
+# parsed after addopts and wins, so "pytest -m soak" runs exactly those tests.
+addopts = "-q --strict-markers -m 'not soak'"
 markers = [
     "concurrency: tests that require real committed transactions and row locking",
+    "soak: long-running tests, sized by SOAK_SCALE (full locally, ci in CI)",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]

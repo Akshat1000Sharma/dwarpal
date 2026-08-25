@@ -68,7 +68,13 @@ export async function backendFetch<T>(path: string, options: RequestOptions = {}
 export async function backendRead<T>(path: string, fallback: T): Promise<T> {
   try {
     return await backendFetch<T>(path);
-  } catch {
+  } catch (error) {
+    // The page still renders its empty state rather than blanking, but an empty table caused by a
+    // 401 must not look identical to one caused by there being nothing to show.
+    console.error(
+      `[dwarpal] ${path} failed, rendering the fallback:`,
+      error instanceof BackendError ? `${error.status} ${error.message}` : error,
+    );
     return fallback;
   }
 }

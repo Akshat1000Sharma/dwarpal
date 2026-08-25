@@ -42,6 +42,42 @@ def verify_webhook_signature(
     return hmac.compare_digest(expected, header_value.strip())
 
 
+def verify_checkout_signature(
+    order_id: str, payment_id: str, signature: str | None, secret: str | None = None
+) -> bool:
+    """Verify what Razorpay Checkout hands back to the page on a successful payment.
+
+    Razorpay signs "order_id|payment_id" with the key secret. Checking it server side is what
+    stops a browser claiming a payment that never happened: the page is untrusted, the HMAC is
+    not. This is a different signature from the webhook one, over different bytes with a different
+    secret, so the two verifiers are kept separate rather than parameterised into one.
+    """
+    if not signature or not order_id or not payment_id:
+        return False
+    key = secret if secret is not None else settings.RAZORPAY_KEY_SECRET
+    if not key:
+        return False
+    expected = hmac.new(
+        key.encode("utf-8"), f"{order_id}|{payment_id}".encode(), hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature.strip())
+
+
+def live_gateway_configured() -> bool:
+    """Whether a real Razorpay test key is present, as opposed to a CI placeholder.
+
+    Startup already refuses a live key. This distinguishes a usable test key from the placeholder
+    CI supplies, so the buyer console can offer the hosted Checkout only when it would work.
+    """
+    key_id = settings.RAZORPAY_KEY_ID
+    return (
+        settings.APP_ENV != "testing"
+        and key_id.startswith("rzp_test_")
+        and len(key_id) > len("rzp_test_") + 6
+        and len(settings.RAZORPAY_KEY_SECRET) > 8
+    )
+
+
 class PaymentGateway(Protocol):
     def create_order(
         self, *, amount_minor: int, currency: str, receipt: str, notes: dict[str, str]

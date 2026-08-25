@@ -31,6 +31,7 @@ from app.escalation import whatsapp
 from app.kernel.reasons import ReasonCode
 from app.logging import get_logger
 from app.payments.gateway import verify_webhook_signature
+from app.settings import settings
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["webhooks"])
@@ -105,14 +106,21 @@ async def razorpay_webhook(
     refund_entity = ((entities.get("refund") or {}).get("entity")) or {}
 
     if payment_entity:
+        # FOR UPDATE, because the buyer console's handler callback can be settling this same
+        # order on another worker. Both paths mutate payment status and finalise the checkout, so
+        # they have to serialise on the row rather than race on an in-memory status check.
         row = db.scalar(
-            select(Payment).where(Payment.razorpay_payment_id == str(payment_entity.get("id")))
+            select(Payment)
+            .where(Payment.razorpay_payment_id == str(payment_entity.get("id")))
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if row is None and payment_entity.get("order_id"):
             row = db.scalar(
-                select(Payment).where(
-                    Payment.razorpay_order_id == str(payment_entity["order_id"])
-                )
+                select(Payment)
+                .where(Payment.razorpay_order_id == str(payment_entity["order_id"]))
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )
         if row is not None:
             snapshot = dict(row.gateway_snapshot or {})
@@ -215,6 +223,18 @@ async def whatsapp_webhook(
 
     payload = json.loads(raw)
     applied: list[dict[str, Any]] = []
+
+    # A WhatsApp Business Account can hold several phone numbers, and every app subscribed to the
+    # account receives every number's events. Anything that did not arrive on this merchant's own
+    # number is reported and not acted on, so a reply meant for somebody else's product on the
+    # same account can never settle an escalation here.
+    foreign = whatsapp.numbers_in(payload) - {settings.META_PHONE_NUMBER_ID}
+    if foreign:
+        logger.info(
+            "ignored webhook traffic for another phone number on this account",
+            extra={"context": {"numbers": sorted(foreign)}},
+        )
+
     for answer in whatsapp.parse_inbound(payload):
         if not answer.escalation_id:
             applied.append({"answer": answer.answer, "ignored": "no_escalation_reference"})
@@ -231,4 +251,8 @@ async def whatsapp_webhook(
                 "ignored_reason": outcome.ignored_reason,
             }
         )
-    return {"received": True, "applied": applied}
+    return {
+        "received": True,
+        "applied": applied,
+        "ignored_other_numbers": sorted(foreign),
+    }

@@ -32,14 +32,18 @@ Razorpay test mode.
 ```
 app/ap2/          JOSE, SD-JWT, AP2 models, vendored schemas, constraint evaluation
 app/kernel/       the deterministic policy kernel. No model client is reachable from here
-app/semantic/     the model boundary: deny or escalate, never approve
+app/semantic/     the merchant's model boundary: deny or escalate, never approve
 app/verification/ the seven ordered verification steps
 app/checkout/     quote, the completion orchestrator, idempotency
 app/payments/     Razorpay gateway, settlement, reconciliation
 app/evidence/     the append-only, hash-chained Evidence Locker
+app/notify/       purchase receipts over WhatsApp, off the request that decided the money
+app/connect/      connections: identity and delivery address for somebody else's agent
+app/buyer/        the buyer's agent. Model-driven on purpose, and never reachable from the kernel
 app/harness/      the adversarial and benign corpora, and the report generators
 app/mcp/          catalog MCP server
 interop/          the AP2 interop driver
+scenarios/        the HTTP scenario suite, and the dashboard data generator
 tools/            the standalone evidence verifier, which imports nothing from app/
 ```
 
@@ -89,6 +93,7 @@ python -m app.cli export-evidence    # write the evidence chain as JSONL
 python -m app.cli export-jwks        # write the merchant public JWK Set
 python -m app.cli verify-chain       # in-process chain check
 python -m app.cli seed               # create the schema and seed the catalog
+python -m app.cli check-channels     # confirm Razorpay and WhatsApp work, sending nothing
 ```
 
 Report generation runs against a separate `<DB_NAME>_reports` database, so a run never disturbs
@@ -103,6 +108,28 @@ python interop/run_interop.py --base https://your-tunnel.ngrok-free.dev
 
 Plays the Trusted Surface, the Shopping Agent and the mocked Credential Provider against a running
 Dwarpal, and validates every credential against the published AP2 schemas before sending it.
+
+## The scenario suite
+
+Eleven suites driven over HTTP against a running merchant. Where the corpus fires attack families
+as data, this proves the same guarantees hold through the real endpoint, under real concurrency,
+across many agents, for as long as you ask.
+
+```bash
+python scenarios/run_suite.py --profile smoke      # a fast configuration check
+python scenarios/run_suite.py --profile standard   # what CI runs
+python scenarios/run_suite.py --profile demo       # fill the dashboard with data
+python scenarios/run_suite.py --profile soak --minutes 20
+python scenarios/run_suite.py --suite s03 s06      # only those
+```
+
+Every case declares what it proves and what it expects before it runs, and both go into
+`reports/scenario_suite.{json,md}` alongside what was observed. Failures are printed and written
+every time; a report that showed only successes would prove nothing.
+
+The suite refuses to run against a merchant that would send real WhatsApp messages. It reads the
+channel modes from `/health` and stops with an explanation rather than driving hundreds of
+purchases into somebody's phone.
 
 ## The adversarial corpus
 
