@@ -509,3 +509,172 @@ def test_a_receipt_is_not_routed_when_two_connections_claim_one_agent_id(seeded)
         kind=NotificationKind.PURCHASE_COMPLETED,
     )
     assert target is None or target.number == settings.ESCALATION_HUMAN_WHATSAPP
+
+
+RECEIPT_TEMPLATE = "dwarpal_purchase_receipt"
+
+
+class FailsTemplateOnly:
+    """Answers the free-form route and refuses the template one, as Meta does before approval."""
+
+    def __init__(self) -> None:
+        self.sent: list[dict[str, object]] = []
+        self.refused: list[dict[str, object]] = []
+
+    def send(self, payload: dict[str, object]) -> dict[str, object]:
+        if payload.get("type") == "template":
+            self.refused.append(payload)
+            raise RuntimeError("(#132001) Template name does not exist in the translation")
+        self.sent.append(payload)
+        return {"messages": [{"id": "wamid.recorded.1"}]}
+
+
+@pytest.fixture()
+def receipt_template(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.settings import settings
+
+    monkeypatch.setattr(settings, "META_RECEIPT_TEMPLATE_NAME", RECEIPT_TEMPLATE)
+    monkeypatch.setattr(settings, "META_RECEIPT_TEMPLATE_LANGUAGE", "en")
+
+
+def _body_params(payload: dict) -> list[str]:
+    components = payload["template"]["components"]
+    body = [c for c in components if c["type"] == "body"]
+    assert len(body) == 1, "the registered template has exactly one body component"
+    return [p["text"] for p in body[0]["parameters"]]
+
+
+def test_the_template_payload_matches_what_was_registered(
+    db: Session, receipt_template: None
+) -> None:
+    connections.create_connection(
+        db, label="Mine", whatsapp="+919876543210", agent_id="agent:receipt-test"
+    )
+    transport = RecordingTransport()
+
+    row = _notify(db, transport, "completed")
+
+    assert row is not None and row.status == NotificationStatus.SENT.value
+    assert row.route == f"template:{RECEIPT_TEMPLATE}"
+
+    payload = transport.sent[0]
+    assert payload["type"] == "template"
+    assert payload["template"]["name"] == RECEIPT_TEMPLATE
+    assert payload["template"]["language"]["code"] == "en", "en_US is a different template to Meta"
+
+    params = _body_params(payload)
+    assert len(params) == 5, "the registered body carries {{1}} through {{5}}"
+    merchant, amount, items, outcome, reference = params
+    assert merchant == "Dwarpal Demo Store"
+    assert amount == "INR 1,450.00"
+    assert items == "2 x Nilgiri Black Tea 250g"
+    assert outcome == "The purchase completed."
+    assert reference == "dwc_receipt_test"
+
+
+def test_the_template_carries_no_buttons(db: Session, receipt_template: None) -> None:
+    """The registered template has none, and sending a button component to one that lacks them fails."""
+    connections.create_connection(
+        db, label="Mine", whatsapp="+919876543210", agent_id="agent:receipt-test"
+    )
+    transport = RecordingTransport()
+
+    _notify(db, transport, "completed")
+
+    kinds = {c["type"] for c in transport.sent[0]["template"]["components"]}
+    assert kinds == {"body"}
+
+
+@pytest.mark.parametrize(
+    ("outcome", "reason_code", "expected"),
+    [
+        ("completed", "APPROVED", "The purchase completed."),
+        ("refused", "BUDGET_EXCEEDED", "The purchase was refused: BUDGET_EXCEEDED."),
+        (
+            "compensated",
+            "MANDATE_REVOKED",
+            "Your authority was withdrawn after payment, so the money was returned.",
+        ),
+    ],
+)
+def test_one_template_covers_all_three_outcomes(
+    db: Session, receipt_template: None, outcome: str, reason_code: str, expected: str
+) -> None:
+    """Only {{4}} varies, which is why three separate templates are not needed."""
+    connections.create_connection(
+        db, label="Mine", whatsapp="+919876543210", agent_id="agent:receipt-test"
+    )
+    transport = RecordingTransport()
+
+    _notify(db, transport, outcome, reason_code=reason_code)
+
+    assert _body_params(transport.sent[0])[3] == expected
+
+
+def test_no_template_parameter_is_ever_empty(db: Session, receipt_template: None) -> None:
+    """Meta rejects the whole send if any body parameter is an empty string.
+
+    A checkout with no line items summarises to "", which is reachable, so the builder substitutes
+    a stand-in rather than letting the receipt fail outright.
+    """
+    connections.create_connection(
+        db, label="Mine", whatsapp="+919876543210", agent_id="agent:receipt-test"
+    )
+    transport = RecordingTransport()
+
+    _notify(db, transport, "completed", cart_summary="")
+
+    params = _body_params(transport.sent[0])
+    assert len(params) == 5
+    assert all(p.strip() for p in params), f"an empty parameter would be refused: {params}"
+
+
+def test_a_template_that_is_not_approved_yet_falls_back_to_free_form(
+    db: Session, receipt_template: None
+) -> None:
+    """For the 24 hours a template sits in review, the human still has to hear about the purchase."""
+    connections.create_connection(
+        db, label="Mine", whatsapp="+919876543210", agent_id="agent:receipt-test"
+    )
+    transport = FailsTemplateOnly()
+
+    row = _notify(db, transport, "completed")
+
+    assert len(transport.refused) == 1, "the template was tried first"
+    assert len(transport.sent) == 1, "the free-form message still went"
+    assert transport.sent[0]["type"] == "text"
+
+    assert row is not None and row.status == NotificationStatus.SENT.value
+    assert row.route == "text", "the route recorded is the one that actually delivered"
+    assert row.error and "132001" in row.error, (
+        "a template that never got approved must stay visible, not be masked by the fallback"
+    )
+
+
+def test_when_every_route_fails_the_attempt_is_still_recorded(
+    db: Session, receipt_template: None
+) -> None:
+    connections.create_connection(
+        db, label="Mine", whatsapp="+919876543210", agent_id="agent:receipt-test"
+    )
+    transport = RecordingTransport(fail_with=RuntimeError("channel down"))
+
+    row = _notify(db, transport, "completed")
+
+    assert row is not None and row.status == NotificationStatus.FAILED.value
+    assert row.error and row.error.count("channel down") == 2, "both routes were tried"
+    assert row.route == f"template:{RECEIPT_TEMPLATE}", "the preferred route names the failure"
+
+
+def test_without_a_configured_template_nothing_changes(db: Session) -> None:
+    """The free-form path is unaffected by the template work; this is the pre-approval default."""
+    connections.create_connection(
+        db, label="Mine", whatsapp="+919876543210", agent_id="agent:receipt-test"
+    )
+    transport = RecordingTransport()
+
+    row = _notify(db, transport, "completed")
+
+    assert row is not None and row.route == "text"
+    assert transport.sent[0]["type"] == "text"
+    assert row.error is None

@@ -29,6 +29,8 @@ if str(BACKEND_ROOT) not in sys.path:
 FORCED = {
     "APP_ENV": "testing",
     "MERCHANT_SIGNING_KEY_DIR": "./secrets/merchant_keys_test",
+    "META_TEMPLATE_NAME": "",
+    "META_RECEIPT_TEMPLATE_NAME": "",
 }
 
 

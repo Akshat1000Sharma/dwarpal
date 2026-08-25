@@ -21,6 +21,17 @@ def _money(amount_minor: int, currency: str) -> str:
     return f"{currency} {amount_minor / 100:,.2f}"
 
 
+def _param(value: str, limit: int, *, absent: str = "not recorded") -> dict[str, str]:
+    """One body parameter for a template send.
+
+    Meta rejects the whole message if any body parameter is an empty string, and an empty one is
+    reachable: a checkout with no line items summarises to "". Substituting a short stand-in loses
+    nothing, because the alternative is that the human hears about the purchase not at all. Only
+    the template route needs this; a free-form text body has no such rule.
+    """
+    return {"type": "text", "text": _one_line(value, limit) or absent}
+
+
 def build_purchase_receipt_message(
     *,
     to_number: str,
@@ -114,11 +125,11 @@ def build_receipt_template_message(
                 {
                     "type": "body",
                     "parameters": [
-                        {"type": "text", "text": _one_line(merchant_name, 60)},
-                        {"type": "text", "text": _money(amount_minor, currency)},
-                        {"type": "text", "text": _one_line(cart_summary, 300)},
-                        {"type": "text", "text": _one_line(outcome_text, 300)},
-                        {"type": "text", "text": _one_line(reference, 64)},
+                        _param(merchant_name, 60, absent="this merchant"),
+                        _param(_money(amount_minor, currency), 60),
+                        _param(cart_summary, 300, absent="no items recorded"),
+                        _param(outcome_text, 300),
+                        _param(reference, 64),
                     ],
                 }
             ],

@@ -121,12 +121,17 @@ def _build(
     agent_id: str,
     reason_code: str,
     reference: str,
-) -> tuple[str, dict[str, Any]]:
-    """The route name and the payload for this receipt.
+) -> list[tuple[str, dict[str, Any]]]:
+    """Every route worth trying for this receipt, best first.
 
     An approved template is preferred when one is configured, because it is the only thing Meta
-    delivers to an inbox that has been quiet for more than 24 hours.
+    delivers to an inbox that has been quiet for more than 24 hours. It can be unavailable for
+    reasons outside this code, most often because it is still in review, and telling the human
+    nothing at all would be a worse answer than telling them by the route that does work. The
+    free-form message only delivers inside the 24 hour window, so it is a fallback and not a
+    replacement. This mirrors the escalation path in app/escalation/service.py.
     """
+    routes: list[tuple[str, dict[str, Any]]] = []
     merchant = settings.MERCHANT_NAME
     if settings.META_RECEIPT_TEMPLATE_NAME:
         outcome_text = _OUTCOME_TEXT.get(kind, f"The purchase was refused: {reason_code}.")
@@ -141,7 +146,7 @@ def _build(
             outcome_text=outcome_text,
             reference=reference,
         )
-        return f"template:{settings.META_RECEIPT_TEMPLATE_NAME}", payload
+        routes.append((f"template:{settings.META_RECEIPT_TEMPLATE_NAME}", payload))
 
     common = {
         "to_number": to_number,
@@ -153,10 +158,14 @@ def _build(
         "reference": reference,
     }
     if kind is NotificationKind.PURCHASE_COMPLETED:
-        return "text", messages.build_purchase_receipt_message(**common)
-    if kind is NotificationKind.PURCHASE_COMPENSATED:
-        return "text", messages.build_purchase_compensated_message(**common)
-    return "text", messages.build_purchase_refused_message(**common, reason_code=reason_code)
+        routes.append(("text", messages.build_purchase_receipt_message(**common)))
+    elif kind is NotificationKind.PURCHASE_COMPENSATED:
+        routes.append(("text", messages.build_purchase_compensated_message(**common)))
+    else:
+        routes.append(
+            ("text", messages.build_purchase_refused_message(**common, reason_code=reason_code))
+        )
+    return routes
 
 
 def _record(
@@ -240,7 +249,7 @@ def notify_outcome(
             summary=cart_summary,
         )
 
-    route, payload = _build(
+    routes = _build(
         kind,
         to_number=target.number,
         amount_minor=amount_minor,
@@ -252,13 +261,25 @@ def notify_outcome(
     )
 
     sender = transport or default_transport()
-    try:
-        response = sender.send(payload)
-    except Exception as exc:
-        logger.warning(
-            "purchase receipt could not be delivered",
-            extra={"context": {"correlation_id": correlation_id, "kind": kind.value}},
-        )
+    failures: list[str] = []
+    for route, payload in routes:
+        try:
+            response = sender.send(payload)
+        except Exception as exc:
+            failures.append(f"{route}: {type(exc).__name__}: {exc}")
+            logger.warning(
+                "purchase receipt route failed",
+                extra={
+                    "context": {
+                        "correlation_id": correlation_id,
+                        "kind": kind.value,
+                        "route": route,
+                    }
+                },
+            )
+            continue
+
+        sent = (response or {}).get("messages") or []
         return _record(
             session,
             correlation_id=correlation_id,
@@ -266,21 +287,27 @@ def notify_outcome(
             kind=kind,
             route=route,
             to_number=target.number,
-            status=NotificationStatus.FAILED,
-            error=f"{type(exc).__name__}: {exc}",
+            status=NotificationStatus.SENT,
+            provider_message_id=str(sent[0].get("id")) if sent else None,
+            # Kept even though the human was reached, so a template that never got approved is
+            # visible rather than masked by the fallback quietly working.
+            error=" | ".join(failures) or None,
             summary=cart_summary,
         )
 
-    sent = (response or {}).get("messages") or []
+    logger.warning(
+        "purchase receipt could not be delivered on any route",
+        extra={"context": {"correlation_id": correlation_id, "kind": kind.value}},
+    )
     return _record(
         session,
         correlation_id=correlation_id,
         connection_id=target.connection_id,
         kind=kind,
-        route=route,
+        route=routes[0][0] if routes else "none",
         to_number=target.number,
-        status=NotificationStatus.SENT,
-        provider_message_id=str(sent[0].get("id")) if sent else None,
+        status=NotificationStatus.FAILED,
+        error=" | ".join(failures),
         summary=cart_summary,
     )
 
