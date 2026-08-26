@@ -22,6 +22,7 @@ from scenarios.suites import (
     s09_evidence_and_disputes,
     s10_degraded_unverified,
     s11_soak_mixed_traffic,
+    s12_human_present,
 )
 
 ALL: list[Callable[[Context], Suite]] = [
@@ -36,6 +37,7 @@ ALL: list[Callable[[Context], Suite]] = [
     s09_evidence_and_disputes.run,
     s10_degraded_unverified.run,
     s11_soak_mixed_traffic.run,
+    s12_human_present.run,
 ]
 
 # The smoke profile is a configuration check, not a proof. It runs the structural suites only.

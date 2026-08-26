@@ -25,6 +25,11 @@ BANNED_PREFIXES: tuple[str, ...] = (
     # stay there: a money decision must never be able to reach it.
     "app.buyer",
     "app.notify",
+    # Agent-facing surfaces. The kernel decides about the traffic these carry; it must not be able
+    # to reach them, in either direction.
+    "app.mcp",
+    "interop",
+    "scenarios",
     "google",
     "google.genai",
     "google.generativeai",
@@ -139,7 +144,9 @@ def test_kernel_reaches_its_legitimate_dependencies() -> None:
     assert "app.ap2.constraints" in reached
 
 
-@pytest.mark.parametrize("banned", ["google.genai", "httpx", "app.semantic", "app.buyer"])
+@pytest.mark.parametrize(
+    "banned", ["google.genai", "httpx", "app.semantic", "app.buyer", "app.mcp", "interop"]
+)
 def test_specific_clients_are_unreachable(banned: str) -> None:
     reached = _closure(sorted(KERNEL_ROOT.glob("*.py")))
     assert banned not in reached, f"{banned} must not be reachable from the policy kernel"

@@ -23,9 +23,11 @@ from app.disputes import responder
 from app.escalation.whatsapp import RecordingTransport
 from app.evidence import locker
 from app.harness import factory
+from app.harness.runner import reset_between_cases
 from app.kernel import revocation
 from app.payments.gateway import StubGateway
 from app.semantic.client import KeywordSemanticClient
+from app.settings import settings
 
 
 @dataclass(frozen=True)
@@ -36,66 +38,93 @@ class DisputeCase:
     variant: str = "clean"
     issuer_id: str = factory.DEFAULT_ISSUER
     natural_language: list[str] | None = None
+    buyer_region: str | None = None
 
 
-BATCH: list[DisputeCase] = [
-    DisputeCase(
-        "clean-single-item",
-        [("DWP-TEA-001", "Nilgiri Black Tea 250g", 1)],
-        "the cardholder states they never authorised this purchase",
-    ),
-    DisputeCase(
-        "clean-multi-line",
-        [
-            ("DWP-TEA-001", "Nilgiri Black Tea 250g", 2),
-            ("DWP-NTB-011", "Hardcover Notebook A5", 1),
-        ],
-        "the cardholder does not recognise this merchant",
-    ),
-    DisputeCase(
-        "clean-high-value",
-        [("DWP-HDP-007", "Wireless Headphones", 1)],
-        "the cardholder states the amount is wrong",
-    ),
-    DisputeCase(
-        "clean-keyboard",
-        [("DWP-KBD-008", "Mechanical Keyboard 75 percent", 1)],
-        "the cardholder states the goods were never ordered",
-    ),
-    DisputeCase(
-        "clean-stationery",
-        [("DWP-NTB-011", "Hardcover Notebook A5", 4)],
-        "the cardholder states this was a duplicate charge",
-    ),
-    DisputeCase(
-        "clean-coffee",
-        [("DWP-COF-002", "Single Origin Coffee Beans 500g", 2)],
-        "the cardholder states the agent exceeded its authority",
-    ),
-    DisputeCase(
-        "regulated-restricted-item",
-        [("DWP-WIN-005", "Sula Cabernet Shiraz 750ml", 1)],
-        "the cardholder states an age-restricted item was sold without authority",
-        issuer_id=factory.REGULATED_ISSUER,
-    ),
-    DisputeCase(
-        "clean-substitute-lamp",
-        [("DWP-LMP-010", "Desk Lamp Compact", 1)],
-        "the cardholder states the item was not as described",
-    ),
-    DisputeCase(
-        "revoked-after-capture",
-        [("DWP-TEA-001", "Nilgiri Black Tea 250g", 1)],
-        "the cardholder revoked authority and disputes the charge",
-        variant="revoke_after_capture",
-    ),
-    DisputeCase(
-        "no-evidence-retained",
-        [("DWP-TEA-001", "Nilgiri Black Tea 250g", 1)],
-        "the cardholder states this purchase was not authorised",
-        variant="evidence_missing",
-    ),
+# The catalog, with the tier and region a legitimate purchase of each item needs. Wine and the
+# chef knife are age restricted, so only a regulated authority may buy them, and the wine is not
+# sold into four states.
+_CATALOG: list[tuple[str, str, str, str | None]] = [
+    ("DWP-TEA-001", "Nilgiri Black Tea 250g", factory.DEFAULT_ISSUER, None),
+    ("DWP-COF-002", "Single Origin Coffee Beans 500g", factory.DEFAULT_ISSUER, None),
+    ("DWP-MLK-003", "Fresh Paneer 400g", factory.DEFAULT_ISSUER, None),
+    ("DWP-MNG-004", "Alphonso Mangoes 1kg", factory.DEFAULT_ISSUER, None),
+    ("DWP-WIN-005", "Sula Cabernet Shiraz 750ml", factory.REGULATED_ISSUER, "KA"),
+    ("DWP-KNF-006", "Chef Knife 8 inch", factory.REGULATED_ISSUER, None),
+    ("DWP-HDP-007", "Wireless Headphones", factory.DEFAULT_ISSUER, None),
+    ("DWP-KBD-008", "Mechanical Keyboard 75 percent", factory.DEFAULT_ISSUER, None),
+    ("DWP-LMP-009", "Desk Lamp with Dimmer", factory.DEFAULT_ISSUER, None),
+    ("DWP-LMP-010", "Desk Lamp Compact", factory.DEFAULT_ISSUER, None),
+    ("DWP-NTB-011", "Hardcover Notebook A5", factory.DEFAULT_ISSUER, None),
+    ("DWP-PEN-012", "Fountain Pen Medium Nib", factory.DEFAULT_ISSUER, None),
 ]
+
+# The reason codes a card network actually sees. Each is scored against the same evidence, because
+# a representment that only answers one kind of claim is not a dispute responder.
+_CLAIMS: list[str] = [
+    "the cardholder states they never authorised this purchase",
+    "the cardholder does not recognise this merchant",
+    "the cardholder states the amount is wrong",
+    "the cardholder states the goods were never ordered",
+    "the cardholder states this was a duplicate charge",
+    "the cardholder states the agent exceeded its authority",
+    "the cardholder states the goods never arrived",
+    "the cardholder states the item was not as described",
+    "the cardholder states the subscription was cancelled before this charge",
+    "the cardholder states the transaction was processed after they revoked consent",
+    "the cardholder states no agent of theirs was ever authorised to buy here",
+    "the cardholder states the merchant charged a different amount than quoted",
+    "the cardholder states they were not told the terms of sale",
+    "the cardholder states the purchase was made without their knowledge",
+    "the cardholder states the credential presented was not issued to their agent",
+]
+
+
+def _build_batch() -> list[DisputeCase]:
+    """Every item, against every claim, plus the two variants where the evidence is weak.
+
+    Generated rather than listed so the batch grows with the catalog, and so the two weak variants
+    stay a fixed, visible fraction of it. A responder that recommends contesting everything is
+    worthless, so the batch has to contain cases it should decline to fight.
+    """
+    cases: list[DisputeCase] = []
+    for sku, title, issuer, region in _CATALOG:
+        for index, claim in enumerate(_CLAIMS):
+            cases.append(
+                DisputeCase(
+                    id=f"clean-{sku.lower()}-{index:02d}",
+                    cart=[(sku, title, 1)],
+                    claim=claim,
+                    issuer_id=issuer,
+                    buyer_region=region,
+                )
+            )
+
+    for index, (sku, title, issuer, region) in enumerate(_CATALOG):
+        cases.append(
+            DisputeCase(
+                id=f"revoked-after-capture-{sku.lower()}",
+                cart=[(sku, title, 1)],
+                claim=_CLAIMS[index % len(_CLAIMS)],
+                variant="revoke_after_capture",
+                issuer_id=issuer,
+                buyer_region=region,
+            )
+        )
+        cases.append(
+            DisputeCase(
+                id=f"no-evidence-retained-{sku.lower()}",
+                cart=[(sku, title, 1)],
+                claim=_CLAIMS[(index + 1) % len(_CLAIMS)],
+                variant="evidence_missing",
+                issuer_id=issuer,
+                buyer_region=region,
+            )
+        )
+    return cases
+
+
+BATCH: list[DisputeCase] = _build_batch()
 
 
 def _run_transaction(session: Session, case: DisputeCase, gateway: StubGateway) -> str:
@@ -135,6 +164,8 @@ def _run_transaction(session: Session, case: DisputeCase, gateway: StubGateway) 
                 gateway=gateway,
                 semantic_client=KeywordSemanticClient(),
                 whatsapp=RecordingTransport(),
+                audience=settings.PUBLIC_BASE_URL,
+                buyer_region=case.buyer_region,
             )
             del outcome
             revocation.revoke(session, mandate.id, "principal revoked after capture")
@@ -151,6 +182,8 @@ def _run_transaction(session: Session, case: DisputeCase, gateway: StubGateway) 
         gateway=gateway,
         semantic_client=KeywordSemanticClient(),
         whatsapp=RecordingTransport(),
+        audience=settings.PUBLIC_BASE_URL,
+        buyer_region=case.buyer_region,
     )
     return correlation
 
@@ -234,6 +267,7 @@ def run_batch(session: Session) -> dict[str, Any]:
     refund_recommended: list[dict[str, Any]] = []
 
     for case in BATCH:
+        reset_between_cases(session)
         correlation = _run_transaction(session, case, gateway)
         packets = locker.for_correlation(session, correlation)
         outcome = packets[-1].body.get("outcome") if packets else "unknown"

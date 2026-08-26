@@ -408,3 +408,83 @@ def test_expired_holds_release_stock(seeded):
     assert inventory.available(db, product) == stock
     hold = db.scalar(select(InventoryHold).where(InventoryHold.checkout_id == "co-slow"))
     assert hold.status == HoldStatus.EXPIRED
+
+
+def test_two_completions_of_one_checkout_yield_exactly_one_sale(seeded):
+    """A Checkout decided by two workers at once must settle once, not twice.
+
+    The credential chain cannot prevent this: each worker presents its own freshly signed closed
+    mandates over the same merchant-signed Checkout, so neither is a replay. The Checkout's own
+    state is the only thing that can, and it has to be read under a lock or both workers find it
+    undecided and both charge.
+    """
+    from app.checkout import quote
+    from app.checkout.complete import complete
+    from app.escalation.whatsapp import RecordingTransport
+    from app.harness import factory
+    from app.kernel.reasons import ReasonCode
+    from app.payments.gateway import StubGateway
+    from app.semantic.client import KeywordSemanticClient
+    from app.settings import settings
+
+    cart = [("DWP-TEA-001", "Nilgiri Black Tea 250g", 1)]
+    principals = factory.Principals.create(agent_id="agent:double-settle", register=True)
+    quoted = quote.create_quote(
+        seeded,
+        agent_id=principals.agent_id,
+        correlation_id="corr_double_settle",
+        lines=[quote.RequestedLine(sku="DWP-TEA-001", quantity=1)],
+    )
+    issued = factory.issue_open_mandates(principals, factory.spec_for_cart(cart))
+    checkout_jwt, checkout_hash = quoted.checkout_jwt, quoted.checkout_hash
+    amount = quoted.row.total_minor
+    seeded.commit()
+
+    presentations = [
+        factory.present_issued(
+            issued,
+            checkout_jwt=checkout_jwt,
+            checkout_hash=checkout_hash,
+            amount_minor=amount,
+            nonce=f"nonce-double-settle-{index}",
+        )
+        for index in range(2)
+    ]
+
+    barrier = threading.Barrier(len(presentations))
+    outcomes: list[object] = []
+    lock = threading.Lock()
+
+    def settle(index: int) -> None:
+        session = db_base.SessionFactory()
+        try:
+            barrier.wait(timeout=20)
+            outcome = complete(
+                session,
+                presentations[index].credentials,
+                correlation_id=f"corr_double_settle_{index}",
+                gateway=StubGateway(),
+                semantic_client=KeywordSemanticClient(),
+                whatsapp=RecordingTransport(),
+                audience=settings.PUBLIC_BASE_URL,
+            )
+            session.commit()
+            with lock:
+                outcomes.append(outcome)
+        except Exception as exc:  # a loser must lose cleanly, not explode
+            session.rollback()
+            with lock:
+                outcomes.append(exc)
+        finally:
+            session.close()
+
+    with ThreadPoolExecutor(max_workers=len(presentations)) as pool:
+        list(pool.map(settle, range(len(presentations))))
+
+    assert not [o for o in outcomes if isinstance(o, Exception)], (
+        f"a concurrent completion raised instead of being refused: {outcomes}"
+    )
+    settled = [o for o in outcomes if o.reason_code is ReasonCode.APPROVED]
+    refused = [o for o in outcomes if o.reason_code is ReasonCode.CHECKOUT_ALREADY_SETTLED]
+    assert len(settled) == 1, f"expected exactly one sale, got {[o.reason_code for o in outcomes]}"
+    assert len(refused) == 1, f"the loser must be told why: {[o.reason_code for o in outcomes]}"

@@ -28,6 +28,9 @@ export async function startRun(formData: FormData): Promise<void> {
       // The form collects rupees because that is what a person types; the wire is always paise.
       budget_cap_minor: Number.isFinite(budget) && budget > 0 ? Math.round(budget * 100) : null,
       natural_language: constraints,
+      // AP2's human-present flow. The trusted surface attests that somebody was at it; the
+      // merchant still verifies that claim, and it widens nothing the human did not already sign.
+      human_present: formData.get("human_present") === "on",
     },
   });
 

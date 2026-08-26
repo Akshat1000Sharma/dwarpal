@@ -96,8 +96,8 @@ def cmd_scorecard(args: argparse.Namespace) -> int:
     document = report.as_dict()
     adversarial, benign = document["adversarial"], document["benign"]
     print(
-        f"attack scorecard: {adversarial['blocked']}/{adversarial['total']} blocked, "
-        f"{adversarial['missed']} missed, "
+        f"attack scorecard: {adversarial['blocked']}/{adversarial['total']} blocked "
+        f"across {adversarial['techniques']} techniques, {adversarial['missed']} missed, "
         f"{benign['false_positives']}/{benign['total']} false positives"
     )
     for miss in document["misses"]:

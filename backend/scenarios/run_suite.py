@@ -3,6 +3,7 @@
     python scenarios/run_suite.py                              standard, against localhost
     python scenarios/run_suite.py --profile smoke              a fast configuration check
     python scenarios/run_suite.py --profile demo               fill the dashboard with data
+    python scenarios/run_suite.py --profile full               every case, at the quoted size
     python scenarios/run_suite.py --profile soak --minutes 20  the long one
     python scenarios/run_suite.py --suite s03 s06              just those suites
 
@@ -34,7 +35,7 @@ from scenarios.harness import (  # noqa: E402
 )
 from scenarios.suites import ALL, SMOKE  # noqa: E402
 
-PROFILES = ("smoke", "standard", "demo", "soak")
+PROFILES = ("smoke", "standard", "demo", "full", "soak")
 
 
 def _environment(client: Client) -> dict[str, Any]:
@@ -67,6 +68,17 @@ def _environment(client: Client) -> dict[str, Any]:
     return out
 
 
+def _restock(client: Client, *, announce: bool = False) -> bool:
+    """Put the shelves back to their seeded levels. Stock only; nothing else is touched."""
+    status, body = client.post("/merchant/catalog/restock", {})
+    if status != 200:
+        print(f"  warning: could not restock the catalog (HTTP {status}).")
+        return False
+    if announce:
+        print(f"  restocked {body.get('restocked')} catalog items\n")
+    return True
+
+
 def run(
     base: str,
     *,
@@ -95,15 +107,11 @@ def run(
         print("  or pass --allow-live-whatsapp if you genuinely want the messages sent.")
         return 2
 
-    # Put the shelves back before measuring anything. Several suites depend on a specific SKU
-    # being buyable, and a run against a shop that a previous run emptied fails everywhere at once
-    # with sold-out errors that look like defects and are not.
-    restock_status, restocked = client.post("/merchant/catalog/restock", {})
-    if restock_status != 200:
-        print(f"  warning: could not restock the catalog (HTTP {restock_status}).")
+    # Put the shelves back before measuring anything. Several suites depend on a specific SKU being
+    # buyable, and a run against a shop a previous run emptied fails everywhere at once with
+    # sold-out errors that look like defects and are not.
+    if not _restock(client, announce=True):
         print("  sold-out refusals in the report may be left over from an earlier run.")
-    else:
-        print(f"  restocked {restocked.get('restocked')} catalog items\n")
 
     audience = merchant_audience(client)
     scale = Scale.for_profile(profile, minutes=minutes, agents=agents)
@@ -123,6 +131,10 @@ def run(
     suites: list[Suite] = []
     for factory_fn in selected:
         name = factory_fn.__module__.split(".")[-1]
+        # Restock between suites as well as before the first. A hundred purchases empty a real
+        # shelf, and a suite that runs last should not be judged against what the ones before it
+        # bought. Each suite then starts from the seeded catalog whatever order they run in.
+        _restock(client)
         print(f"  running {name} ...", flush=True)
         try:
             suites.append(factory_fn(ctx))

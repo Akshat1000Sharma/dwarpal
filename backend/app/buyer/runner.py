@@ -41,11 +41,9 @@ logger = get_logger(__name__)
 # the merchant's verdict log rather than mixed in with interop or corpus traffic.
 AGENT_PREFIX = "agent:console-"
 
-# A bounded pool, for the same reason app/notify/service.py uses one worker rather than a thread
-# per receipt: every run holds a session of its own for the length of a purchase, and the engine
-# pool is 20. An unbounded thread per request would let a handful of console calls drain it and
-# starve the merchant surface. Queued runs wait their turn instead, which the console shows as a
-# run that has not started yet.
+# Bounded, because every run holds a session for the length of a purchase and the engine pool is
+# 20. A thread per request would let a few console calls starve the merchant surface. Queued runs
+# wait, which the console shows as a run that has not started yet.
 _MAX_CONCURRENT_RUNS = 4
 _pool: ThreadPoolExecutor | None = None
 _pool_lock = threading.Lock()
@@ -68,6 +66,9 @@ class RunRequest:
     natural_language: list[str] | None = None
     connection_id: str | None = None
     agent_id: str | None = None
+    # AP2's human-present flow. The console is the one place where a person genuinely is at the
+    # surface, so it is the honest place to demonstrate it.
+    human_present: bool = False
 
 
 class RunLog:
@@ -333,8 +334,20 @@ def _drive(
         amount_minor=quoted.row.total_minor,
         audience=settings.PUBLIC_BASE_URL,
         nonce=f"console-{run.correlation_id[-12:]}",
+        human_present=request.human_present,
     )
     credentials = presentation.credentials
+    if request.human_present:
+        log.event(
+            "presence_attested",
+            "The trusted surface attested that a person was at it for this exact cart",
+            data={
+                "flow": "human-present",
+                "bound_to_checkout_hash": quoted.checkout_hash[:16] + "...",
+                "valid_for_seconds": settings.PRESENCE_MAX_AGE_SECONDS,
+                "note": "verified like any other credential, and it widens nothing",
+            },
+        )
     log.event(
         "closed_mandates",
         "The agent signed the two closed mandates and proved it holds the key they were issued to",

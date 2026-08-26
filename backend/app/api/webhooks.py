@@ -224,10 +224,9 @@ async def whatsapp_webhook(
     payload = json.loads(raw)
     applied: list[dict[str, Any]] = []
 
-    # A WhatsApp Business Account can hold several phone numbers, and every app subscribed to the
-    # account receives every number's events. Anything that did not arrive on this merchant's own
-    # number is reported and not acted on, so a reply meant for somebody else's product on the
-    # same account can never settle an escalation here.
+    # Every app subscribed to a WhatsApp Business Account receives every number's events. Anything
+    # that did not arrive on this merchant's own number is reported and not acted on, so a reply
+    # meant for another product on the same account cannot settle an escalation here.
     foreign = whatsapp.numbers_in(payload) - {settings.META_PHONE_NUMBER_ID}
     if foreign:
         logger.info(
@@ -240,7 +239,11 @@ async def whatsapp_webhook(
             applied.append({"answer": answer.answer, "ignored": "no_escalation_reference"})
             continue
         outcome = escalation_service.record_answer(
-            db, answer.escalation_id, answer.answer, message_id=answer.message_id
+            db,
+            answer.escalation_id,
+            answer.answer,
+            message_id=answer.message_id,
+            from_number=answer.from_number or "",
         )
         applied.append(
             {

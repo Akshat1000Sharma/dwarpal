@@ -26,17 +26,9 @@ from app.settings import settings
 
 GENESIS_HASH = "GENESIS"
 
-# A hash chain is serial by definition: every entry commits to the one before it, so two writers
-# choosing the same predecessor is the chain forking, not a contention problem to tune away.
-#
-# So appends are serialised by an advisory lock rather than raced and retried. Retrying was tried
-# first and is not good enough: under contention writers keep colliding, and an evidence packet
-# that was dropped after too many attempts is the one outcome this module exists to prevent.
-#
-# The lock is transaction-scoped, so it is held until the caller commits. That is only safe
-# because nothing slow happens after an append: the packet is the last thing written before a
-# checkout returns, and the WhatsApp receipt that used to sit here was moved off the request in
-# app/notify/service.py precisely so this lock is never held across a network call.
+# A hash chain is serial by definition, so appends take an advisory lock rather than racing and
+# retrying: a packet dropped after too many attempts is the one outcome this module prevents. The
+# lock is transaction-scoped, which is safe only because nothing slow happens after an append.
 _CHAIN_LOCK_KEY = 8_474_101_982_735_461
 
 # The lock makes a collision impossible in one process against one database. The retry stays as a

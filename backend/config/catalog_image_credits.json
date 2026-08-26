@@ -4,83 +4,119 @@
     "page": "https://commons.wikimedia.org/wiki/File%3ACeylon-amba.jpg",
     "licence": "CC BY-SA 4.0",
     "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/60/Ceylon-amba.jpg/960px-Ceylon-amba.jpg",
-    "local": "frontend/public/catalog/DWP-TEA-001.jpg"
+    "local": "frontend/public/catalog/DWP-TEA-001.jpg",
+    "author": "Oraola",
+    "changes": "resized to 960px wide; not otherwise modified",
+    "attribution_required": true
   },
   "DWP-COF-002": {
     "file": "File:Roasted Coffee Beans Texture.jpg",
     "page": "https://commons.wikimedia.org/wiki/File%3ARoasted_Coffee_Beans_Texture.jpg",
     "licence": "CC BY-SA 3.0",
     "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/53/Roasted_Coffee_Beans_Texture.jpg/960px-Roasted_Coffee_Beans_Texture.jpg",
-    "local": "frontend/public/catalog/DWP-COF-002.jpg"
+    "local": "frontend/public/catalog/DWP-COF-002.jpg",
+    "author": "freestock.ca",
+    "changes": "resized to 960px wide; not otherwise modified",
+    "attribution_required": true
   },
   "DWP-MLK-003": {
     "file": "File:Paneer-in-sieve.jpg",
     "page": "https://commons.wikimedia.org/wiki/File%3APaneer-in-sieve.jpg",
     "licence": "CC0",
     "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/24/Paneer-in-sieve.jpg/960px-Paneer-in-sieve.jpg",
-    "local": "frontend/public/catalog/DWP-MLK-003.jpg"
+    "local": "frontend/public/catalog/DWP-MLK-003.jpg",
+    "author": "MartinThoma",
+    "changes": "resized to 960px wide; not otherwise modified",
+    "attribution_required": false
   },
   "DWP-MNG-004": {
     "file": "File:Alphonso Mangoes.jpg",
     "page": "https://commons.wikimedia.org/wiki/File%3AAlphonso_Mangoes.jpg",
     "licence": "CC BY-SA 4.0",
     "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5e/Alphonso_Mangoes.jpg/960px-Alphonso_Mangoes.jpg",
-    "local": "frontend/public/catalog/DWP-MNG-004.jpg"
+    "local": "frontend/public/catalog/DWP-MNG-004.jpg",
+    "author": "SANHITA TALATHI",
+    "changes": "resized to 960px wide; not otherwise modified",
+    "attribution_required": true
   },
   "DWP-WIN-005": {
     "file": "File:Bottle and glass of red wine.jpg",
     "page": "https://commons.wikimedia.org/wiki/File%3ABottle_and_glass_of_red_wine.jpg",
     "licence": "CC0",
     "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/Bottle_and_glass_of_red_wine.jpg/960px-Bottle_and_glass_of_red_wine.jpg",
-    "local": "frontend/public/catalog/DWP-WIN-005.jpg"
+    "local": "frontend/public/catalog/DWP-WIN-005.jpg",
+    "author": "congerdesign",
+    "changes": "resized to 960px wide; not otherwise modified",
+    "attribution_required": false
   },
   "DWP-KNF-006": {
     "file": "File:Four chef's knives and an paring knife.jpg",
     "page": "https://commons.wikimedia.org/wiki/File%3AFour_chef%27s_knives_and_an_paring_knife.jpg",
     "licence": "CC BY-SA 3.0",
     "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/31/Four_chef%27s_knives_and_an_paring_knife.jpg/960px-Four_chef%27s_knives_and_an_paring_knife.jpg",
-    "local": "frontend/public/catalog/DWP-KNF-006.jpg"
+    "local": "frontend/public/catalog/DWP-KNF-006.jpg",
+    "author": "Olaf Simons",
+    "changes": "resized to 960px wide; not otherwise modified",
+    "attribution_required": true
   },
   "DWP-HDP-007": {
     "file": "File:AudioQuest Nighthawk Carbon headphones (34382953586).jpg",
     "page": "https://commons.wikimedia.org/wiki/File%3AAudioQuest_Nighthawk_Carbon_headphones_%2834382953586%29.jpg",
     "licence": "CC BY 2.0",
     "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/03/AudioQuest_Nighthawk_Carbon_headphones_%2834382953586%29.jpg/960px-AudioQuest_Nighthawk_Carbon_headphones_%2834382953586%29.jpg",
-    "local": "frontend/public/catalog/DWP-HDP-007.jpg"
+    "local": "frontend/public/catalog/DWP-HDP-007.jpg",
+    "author": "david falkner from Birmingham, England",
+    "changes": "resized to 960px wide; not otherwise modified",
+    "attribution_required": true
   },
   "DWP-KBD-008": {
     "file": "File:Beautiful Mechanical Keyboard.jpg",
     "page": "https://commons.wikimedia.org/wiki/File%3ABeautiful_Mechanical_Keyboard.jpg",
     "licence": "CC BY-SA 4.0",
     "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7f/Beautiful_Mechanical_Keyboard.jpg/960px-Beautiful_Mechanical_Keyboard.jpg",
-    "local": "frontend/public/catalog/DWP-KBD-008.jpg"
+    "local": "frontend/public/catalog/DWP-KBD-008.jpg",
+    "author": "Anirban Saha",
+    "changes": "resized to 960px wide; not otherwise modified",
+    "attribution_required": true
   },
   "DWP-LMP-009": {
     "file": "File:Anglepoise.jpg",
     "page": "https://commons.wikimedia.org/wiki/File%3AAnglepoise.jpg",
     "licence": "CC BY-SA 3.0",
     "url": "https://upload.wikimedia.org/wikipedia/commons/5/54/Anglepoise.jpg",
-    "local": "frontend/public/catalog/DWP-LMP-009.jpg"
+    "local": "frontend/public/catalog/DWP-LMP-009.jpg",
+    "author": "Nick Stenning from UK",
+    "changes": "resized to 960px wide; not otherwise modified",
+    "attribution_required": true
   },
   "DWP-LMP-010": {
     "file": "File:Desktop-lamp-1 hg.jpg",
     "page": "https://commons.wikimedia.org/wiki/File%3ADesktop-lamp-1_hg.jpg",
     "licence": "CC BY-SA 4.0",
     "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1f/Desktop-lamp-1_hg.jpg/960px-Desktop-lamp-1_hg.jpg",
-    "local": "frontend/public/catalog/DWP-LMP-010.jpg"
+    "local": "frontend/public/catalog/DWP-LMP-010.jpg",
+    "author": "Hannes Grobe",
+    "changes": "resized to 960px wide; not otherwise modified",
+    "attribution_required": true
   },
   "DWP-NTB-011": {
     "file": "File:White work table with notes, smartphone and laptop (Unsplash).jpg",
     "page": "https://commons.wikimedia.org/wiki/File%3AWhite_work_table_with_notes%2C_smartphone_and_laptop_%28Unsplash%29.jpg",
     "licence": "CC0",
     "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dc/White_work_table_with_notes%2C_smartphone_and_laptop_%28Unsplash%29.jpg/960px-White_work_table_with_notes%2C_smartphone_and_laptop_%28Unsplash%29.jpg",
-    "local": "frontend/public/catalog/DWP-NTB-011.jpg"
+    "local": "frontend/public/catalog/DWP-NTB-011.jpg",
+    "author": "JESHOOTS.COM jeshoots",
+    "changes": "resized to 960px wide; not otherwise modified",
+    "attribution_required": false
   },
   "DWP-PEN-012": {
     "file": "File:Fountain-pen-nib-pilot74.jpg",
     "page": "https://commons.wikimedia.org/wiki/File%3AFountain-pen-nib-pilot74.jpg",
     "licence": "CC BY-SA 4.0",
     "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e3/Fountain-pen-nib-pilot74.jpg/960px-Fountain-pen-nib-pilot74.jpg",
-    "local": "frontend/public/catalog/DWP-PEN-012.jpg"
+    "local": "frontend/public/catalog/DWP-PEN-012.jpg",
+    "author": "Pavel.satrapa",
+    "changes": "resized to 960px wide; not otherwise modified",
+    "attribution_required": true
   }
 }

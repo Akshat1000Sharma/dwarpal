@@ -615,16 +615,29 @@ def catalog_state(db: Annotated[Session, Depends(get_db)]) -> dict[str, Any]:
 
 @router.post("/catalog/restock")
 def restock(db: Annotated[Session, Depends(get_db)]) -> dict[str, Any]:
-    """Put the shelves back to their seeded levels.
+    """Put the shelves back to their seeded levels, and make them buyable again.
 
     A real merchant receives deliveries, and a demonstration that cannot restock runs itself dry
     after a few hundred agent purchases and then reports correct sold-out refusals as if they were
-    failures. This resets stock only; nothing about the verdicts, evidence or mandates is touched.
+    failures. Outstanding holds are released as well as stock reset: what is on the shelf is stock
+    minus everyone else's holds, so restoring one without the other leaves the shelf full and the
+    catalog still sold out. That includes holds for carts still in flight, which is what an
+    operator asking to reset the shelves is asking for; such a cart is then refused at completion
+    for want of stock rather than sold something nobody reserved. Verdicts, evidence and mandates
+    are untouched.
     """
-    from app.db.bootstrap import seed_catalog
+    from sqlalchemy import update
 
+    from app.db.bootstrap import seed_catalog
+    from app.db.models import HoldStatus, InventoryHold
+
+    released = db.execute(
+        update(InventoryHold)
+        .where(InventoryHold.status == HoldStatus.HELD)
+        .values(status=HoldStatus.RELEASED)
+    ).rowcount
     restocked = seed_catalog(db, replace=True)
-    return {"restocked": restocked}
+    return {"restocked": restocked, "holds_released": int(released or 0)}
 
 
 @router.get("/notifications")
@@ -652,9 +665,18 @@ def notifications(db: Annotated[Session, Depends(get_db)]) -> dict[str, Any]:
     }
 
 
+# The per-case lists are the bulk of each artifact and only one page renders them. Serving them on
+# every read would put most of a megabyte on the public page's critical path to show five figures.
+_PER_CASE_KEYS = {"attack_scorecard": "results", "dispute_defence": "disputes"}
+
+
 @router.get("/reports")
-def reports() -> dict[str, Any]:
-    """Serve the generated report artifacts, if they have been produced."""
+def reports(full: bool = False) -> dict[str, Any]:
+    """Serve the generated report artifacts, if they have been produced.
+
+    Headline figures, the technique roll-up, every miss and every false positive are always
+    included; those are what makes the numbers checkable. ``full=true`` adds the per-case tables.
+    """
     directory = settings.resolve("./reports")
     out: dict[str, Any] = {"generated": False, "attack_scorecard": None, "dispute_defence": None}
     artifacts = (
@@ -663,7 +685,13 @@ def reports() -> dict[str, Any]:
     )
     for name, key in artifacts:
         path = directory / name
-        if path.exists():
-            out[key] = json.loads(path.read_text(encoding="utf-8"))
-            out["generated"] = True
+        if not path.exists():
+            continue
+        document = json.loads(path.read_text(encoding="utf-8"))
+        per_case = _PER_CASE_KEYS[key]
+        document[f"{per_case}_count"] = len(document.get(per_case) or [])
+        if not full:
+            document.pop(per_case, None)
+        out[key] = document
+        out["generated"] = True
     return out

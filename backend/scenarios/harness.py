@@ -294,6 +294,7 @@ class Shopper:
         audience: str,
         tamper: factory.Tamper | None = None,
         nonce: str | None = None,
+        human_present: bool = False,
     ) -> factory.Presentation:
         return factory.present_issued(
             issued,
@@ -303,9 +304,29 @@ class Shopper:
             audience=audience,
             nonce=nonce or self.next_nonce(),
             tamper=tamper,
+            human_present=human_present,
         )
 
-    def complete(self, presentation: factory.Presentation) -> tuple[int, dict[str, Any]]:
+    def confirm(
+        self, escalation_id: str, quoted: Quoted, decision: str
+    ) -> tuple[int, dict[str, Any]]:
+        """Answer an escalation the way a person at the surface does: with a signature."""
+        return self.client.post(
+            "/checkout/confirm",
+            {
+                "escalation_id": escalation_id,
+                "confirmation": factory.sign_confirmation(
+                    self.principals,
+                    escalation_id=escalation_id,
+                    checkout_hash=quoted.checkout_hash,
+                    decision=decision,
+                ),
+            },
+        )
+
+    def complete(
+        self, presentation: factory.Presentation, *, buyer_region: str | None = None
+    ) -> tuple[int, dict[str, Any]]:
         credentials = presentation.credentials
         return self.client.post(
             "/checkout/complete",
@@ -315,6 +336,8 @@ class Shopper:
                 "open_payment_mandate": credentials.open_payment,
                 "closed_payment_mandate": credentials.closed_payment,
                 "nonce": credentials.nonce,
+                "presence_attestation": credentials.presence,
+                "buyer_region": buyer_region,
             },
         )
 
@@ -327,6 +350,8 @@ class Shopper:
         natural_language: list[str] | None = None,
         tamper: factory.Tamper | None = None,
         pay: bool = True,
+        human_present: bool = False,
+        buyer_region: str | None = None,
         **spec_kwargs: Any,
     ) -> dict[str, Any]:
         """Quote, authorise, present and settle. The ordinary path, in one call."""
@@ -338,11 +363,14 @@ class Shopper:
             tamper=tamper,
             **spec_kwargs,
         )
-        presentation = self.present(issued, quote, audience=audience, tamper=tamper)
-        status, outcome = self.complete(presentation)
+        presentation = self.present(
+            issued, quote, audience=audience, tamper=tamper, human_present=human_present
+        )
+        status, outcome = self.complete(presentation, buyer_region=buyer_region)
         outcome["_http_status"] = status
         outcome["_quote"] = quote
         outcome["_issued"] = issued
+        outcome["_shopper"] = self
         if pay and outcome.get("status") == "awaiting_payment":
             pay_order(self.client, outcome)
             status, refreshed = self.client.get(f"/checkout/{quote.checkout_id}")
@@ -428,6 +456,8 @@ class Scale:
                             structuring_attempts=6, soak_seconds=20),
             "demo": cls("demo", purchases=6, concurrency=16, agents=10,
                         structuring_attempts=8, soak_seconds=45),
+            "full": cls("full", purchases=10, concurrency=20, agents=12,
+                        structuring_attempts=10, soak_seconds=60),
             "soak": cls("soak", purchases=8, concurrency=24, agents=12,
                         structuring_attempts=10, soak_seconds=300),
         }[profile]

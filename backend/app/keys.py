@@ -56,10 +56,15 @@ def merchant_key() -> KeyPair:
 
     path.parent.mkdir(parents=True, exist_ok=True)
     keypair = generate_keypair(settings.MERCHANT_KEY_ID)
-    path.write_bytes(private_key_to_pem(keypair.private_key))
-    # Windows does not honour POSIX modes here; the directory is gitignored either way.
+    # Created with the mode already set, not chmod'ed afterwards: writing first leaves the private
+    # key readable by anybody for as long as the two calls take. Windows does not honour POSIX
+    # modes here, and the directory is gitignored either way.
+    mode = stat.S_IRUSR | stat.S_IWUSR
+    descriptor = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, mode)
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(private_key_to_pem(keypair.private_key))
     with contextlib.suppress(OSError):
-        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+        os.chmod(path, mode)
     return keypair
 
 

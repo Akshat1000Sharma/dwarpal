@@ -1,0 +1,145 @@
+family: presence
+description: >
+  Attacks on the human-present flow. A checkout may claim that a person was at a trusted surface
+  when the cart was assembled, and that claim is the easiest thing in the protocol to assert.
+
+  Every technique here tries to obtain the human-present label without a person, or to make
+  presence do work it is not entitled to do. The last two are the important ones: presence is
+  recorded, never rewarded, so an attestation that verifies perfectly still buys nothing.
+
+carts: &carts
+  - [{sku: DWP-TEA-001, title: Nilgiri Black Tea 250g, quantity: 1}]
+  - [{sku: DWP-NTB-011, title: Hardcover Notebook A5, quantity: 2}]
+  - [{sku: DWP-MLK-003, title: Fresh Paneer 400g, quantity: 3}]
+  - - {sku: DWP-TEA-001, title: Nilgiri Black Tea 250g, quantity: 1}
+    - {sku: DWP-NTB-011, title: Hardcover Notebook A5, quantity: 1}
+
+issuers: &issuers
+  - did:web:trusted-surface.dwarpal.test
+  - did:web:sandbox-wallet.dwarpal.test
+  - did:web:bank.dwarpal.test
+
+scenarios:
+  - id: presence-attestation-forged
+    description: >
+      The attestation is signed by a key no trusted surface holds. Anyone who could mint one would
+      be able to label any agent purchase as something a person watched happen.
+    setup:
+      human_present: true
+    tamper:
+      forge_presence_signature: true
+    expect_blocked: true
+    expect_reason_codes:
+      - PRESENCE_ATTESTATION_INVALID
+    matrix:
+      cart: *carts
+      mandate.issuer_id: *issuers
+
+  - id: presence-attested-by-an-untrusted-surface
+    description: An authority outside the trust registry claims to have watched the person.
+    setup:
+      human_present: true
+    tamper:
+      presence_issuer_id: did:web:not-in-the-registry.test
+    expect_blocked: true
+    expect_reason_codes:
+      - PRESENCE_ISSUER_UNTRUSTED
+    matrix:
+      cart: *carts
+      mandate.issuer_id: *issuers
+
+  - id: presence-attestation-is-stale
+    description: >
+      A genuine attestation from an hour ago, replayed now. Presence is a claim about this moment,
+      so an old one is not a weaker version of the same thing; it is a claim about a different one.
+    setup:
+      human_present: true
+    tamper:
+      presence_age_seconds: 3600
+    expect_blocked: true
+    expect_reason_codes:
+      - PRESENCE_ATTESTATION_STALE
+    matrix:
+      cart: *carts
+      mandate.issuer_id: *issuers
+
+  - id: presence-bound-to-another-checkout
+    description: >
+      A person really was present, for a different cart. Carrying that attestation across to this
+      one is how a watched purchase of one item becomes an unwatched purchase of another.
+    setup:
+      human_present: true
+    tamper:
+      presence_checkout_hash: the-digest-of-some-other-checkout
+    expect_blocked: true
+    expect_reason_codes:
+      - PRESENCE_BINDING_MISMATCH
+    matrix:
+      cart: *carts
+      mandate.issuer_id: *issuers
+
+  - id: presence-does-not-lift-the-amount-cap
+    description: >
+      The attestation is perfectly valid and the cart is over the cap the human signed. Presence
+      must not be treated as consent to something the mandate does not cover, and the refusal here
+      is the same one an absent buyer would get.
+    mandate:
+      amount_cap_minor: 10000
+    setup:
+      human_present: true
+    expect_blocked: true
+    expect_reason_codes:
+      - CONSTRAINT_AMOUNT_EXCEEDED
+    matrix:
+      cart: *carts
+      mandate.issuer_id: *issuers
+
+  - id: presence-does-not-settle-a-prose-constraint
+    description: >
+      Somebody is at the keyboard and the human's own instruction is one arithmetic cannot decide.
+      Being present is not the same as having been asked, so this still escalates.
+    setup:
+      human_present: true
+    expect_blocked: true
+    expect_reason_codes:
+      - ESCALATION_REQUIRED
+      - ESCALATION_TIMEOUT
+      - SEMANTIC_DENIED
+    matrix:
+      cart: *carts
+      mandate.natural_language:
+        - {label: fortnight, value: [only items the household will use within a fortnight]}
+        - {label: tasteful, value: [only things that match the rest of the furniture]}
+
+  - id: presence-does-not-outrank-a-revoked-mandate
+    description: >
+      The human revokes, then a purchase arrives claiming they were watching it. Revocation is read
+      immediately before money moves and presence does not reopen it.
+    setup:
+      human_present: true
+      revoke_before_capture: true
+    expect_blocked: true
+    expect_reason_codes:
+      - MANDATE_REVOKED
+    matrix:
+      cart: *carts
+      mandate.issuer_id: *issuers
+
+  - id: presence-does-not-permit-a-restricted-item
+    description: >
+      A tier that may not buy age-restricted goods does not acquire the right by having somebody
+      watch. The item policy is the merchant's obligation, not the buyer's preference.
+    setup:
+      human_present: true
+    expect_blocked: true
+    expect_reason_codes:
+      - ITEM_AGE_RESTRICTED
+      - CATEGORY_FORBIDDEN
+      - UNVERIFIED_CATEGORY_FORBIDDEN
+    matrix:
+      cart:
+        - [{sku: DWP-WIN-005, title: Sula Cabernet Shiraz 750ml, quantity: 1}]
+        - [{sku: DWP-KNF-006, title: Chef Knife 8 inch, quantity: 1}]
+      mandate.issuer_id:
+        - did:web:trusted-surface.dwarpal.test
+        - did:web:sandbox-wallet.dwarpal.test

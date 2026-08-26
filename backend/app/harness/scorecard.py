@@ -32,10 +32,9 @@ def _pct(value: float) -> str:
     return f"{value * 100:.1f}%"
 
 
-# Specification section 12 lists one family the corpus cannot host. The corpus runs inside a single
-# transaction that is rolled back, so a genuine concurrent draw, which needs several committed
-# sessions racing each other, would have to leak writes past that rollback. It is enforced by a
-# dedicated fuzz test instead, and is named here so the headline number is not read as covering it.
+# One family the corpus cannot host: a genuine concurrent draw needs several committed sessions
+# racing, and the corpus runs inside a single transaction. It is named here so the headline number
+# is not read as covering it.
 ENFORCED_ELSEWHERE = [
     "",
     "## Enforced outside this corpus",
@@ -43,18 +42,42 @@ ENFORCED_ELSEWHERE = [
     "- Concurrent draw against a single mandate cap, in `tests/test_concurrency.py`. That suite "
     "races many committed sessions against one cap and includes a naive check-then-write control "
     "that demonstrably breaches it, which a single-transaction corpus cannot reproduce.",
+    "",
+    "## What these numbers do not claim",
+    "",
+    "Stated here rather than left for a reader to infer.",
+    "",
+    "- **The semantic check runs against a deterministic offline classifier, not a model.** The "
+    "corpus has to be reproducible and cannot depend on a network call, so the prompt-injection "
+    "cases prove that the gate around the model holds: untrusted product text and agent free text "
+    "reach the classifier inside a delimited block, an unexpected reply is treated as an "
+    "escalation, and a `violates` reply denies. They do not measure how a particular model "
+    "behaves when it reads an injection payload.",
+    "- **Stateful defences are measured within a case, not across the run.** Inventory, runtime "
+    "keys and spend history are reset between cases so that one case cannot decide another. "
+    "Techniques that need history, such as structuring and recurrence, build it inside their own "
+    "case using repeated attempts.",
+    "- **A multi-attempt technique is scored on its final attempt.** That is the attempt the "
+    "technique is about; the earlier ones exist to create the state it needs.",
 ]
 
 
 def render_attack_markdown(report: dict[str, Any]) -> str:
     adversarial = report["adversarial"]
     benign = report["benign"]
+    techniques = adversarial.get("techniques", len(report.get("techniques", [])))
     lines = [
         "# Dwarpal attack scorecard",
         "",
         f"Generated {report['generated_at']} for merchant `{report['merchant']}`.",
         "",
-        "Both numbers are reported together on purpose. A gate that refuses all traffic would",
+        f"**{adversarial['total']} adversarial cases across {techniques} techniques in "
+        f"{len(report['families'])} families**, and {benign['total']} cases of matched legitimate",
+        "traffic. A technique is one attack idea; a case is that idea executed against one item,",
+        "issuing tier and amount. They are counted separately so neither number can be read as the",
+        "other.",
+        "",
+        "Both halves are reported together on purpose. A gate that refuses all traffic would",
         "show a perfect block rate and be useless, so the false-positive rate against matched",
         "legitimate traffic is given equal weight.",
         "",
@@ -62,21 +85,38 @@ def render_attack_markdown(report: dict[str, Any]) -> str:
         "",
         "| Measure | Value |",
         "|---|---|",
-        f"| Adversarial scenarios | {adversarial['total']} |",
+        f"| Adversarial techniques | {techniques} |",
+        f"| Adversarial cases executed | {adversarial['total']} |",
         f"| Blocked | {adversarial['blocked']} |",
         f"| Blocked with the expected reason code | {adversarial['passed']} |",
         f"| **Missed** | **{adversarial['missed']}** |",
         f"| Block rate | {_pct(adversarial['block_rate'])} |",
-        f"| Benign scenarios | {benign['total']} |",
+        f"| Benign cases executed | {benign['total']} |",
         f"| Allowed | {benign['allowed']} |",
         f"| Escalated to the human by design | {benign['escalated_to_human']} |",
         f"| **False positives** | **{benign['false_positives']}** |",
+        f"| **Settled without asking** | **{benign.get('settled_without_asking', 0)}** |",
         f"| False-positive rate | {_pct(benign['false_positive_rate'])} |",
         "",
         "## Families covered",
         "",
     ]
     lines.extend(f"- {family}" for family in report["families"])
+    if report.get("by_technique"):
+        lines.extend(
+            [
+                "",
+                "## Every technique, and how many cases it was executed as",
+                "",
+                "| Technique | Family | Cases | Blocked | Missed |",
+                "|---|---|---|---|---|",
+            ]
+        )
+        for entry in report["by_technique"]:
+            lines.append(
+                f"| `{entry['technique']}` | {entry['family']} | {entry['cases']} | "
+                f"{entry['blocked']} | {entry['missed']} |"
+            )
     lines.extend(ENFORCED_ELSEWHERE)
     lines.extend(["", "## Misses", ""])
     if report["misses"]:
@@ -113,6 +153,26 @@ def render_attack_markdown(report: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## Settled without asking",
+            "",
+            "Legitimate traffic the scenario declared should reach a human, which the merchant",
+            "completed on its own instead. This is the mirror of a false positive and the more",
+            "serious direction to fail in, so it is counted rather than folded into the",
+            "allowed total.",
+            "",
+        ]
+    )
+    if report.get("settled_without_asking_detail"):
+        lines.append("| Scenario | Completed as |")
+        lines.append("|---|---|")
+        for entry in report["settled_without_asking_detail"]:
+            lines.append(f"| `{entry['id']}` | {entry['observed_reason_code']} |")
+    else:
+        lines.append("None. Every scenario that declared it needed a human reached one.")
+
+    lines.extend(
+        [
+            "",
             "## Every scenario",
             "",
             "| Scenario | Kind | Blocked | Reason code | Pass |",
@@ -136,6 +196,12 @@ def render_dispute_markdown(report: dict[str, Any]) -> str:
         "Each synthetic dispute is scored twice: once against the evidence packet Dwarpal filed,",
         "and once against a baseline merchant that kept only the payment record. The difference is",
         "what the Evidence Locker is worth.",
+        "",
+        "One thing to read the case count correctly. A representment is scored on the evidence the",
+        "merchant holds, not on what the cardholder alleged, so the claim texts are carried",
+        "into the representment and do not move the score. The batch varies the item, the issuing",
+        "tier, the buyer region and the transaction variant, and it is those that change the",
+        "outcome; the claims vary the wording of the same argument.",
         "",
         "## Headline",
         "",

@@ -11,7 +11,7 @@ server error, because an agent cannot act on a 500.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
@@ -161,6 +161,41 @@ def consume(session: Session, checkout_id: str) -> int:
         hold.status = HoldStatus.CONSUMED
     session.flush()
     return len(holds)
+
+
+def held_units(session: Session, checkout_id: str, *, now: datetime | None = None) -> int:
+    """Units this Checkout still has held. Zero means the sale would not be backed by stock.
+
+    A hold past its TTL is not counted even though nothing has flipped its status yet: expiry is
+    what the clock says, not what a later writer gets round to recording.
+    """
+    moment = now or utcnow()
+    total = session.scalar(
+        select(func.coalesce(func.sum(InventoryHold.quantity), 0)).where(
+            InventoryHold.checkout_id == checkout_id,
+            InventoryHold.status == HoldStatus.HELD,
+            InventoryHold.expires_at > moment,
+        )
+    )
+    return int(total or 0)
+
+
+def extend(session: Session, checkout_id: str, until: datetime) -> int:
+    """Hold this Checkout's stock at least until the given moment.
+
+    Used when a question goes to a human: the cart must still be there when they answer, and the
+    quote TTL is shorter than the deadline they were given.
+    """
+    result = session.execute(
+        update(InventoryHold)
+        .where(
+            InventoryHold.checkout_id == checkout_id,
+            InventoryHold.status == HoldStatus.HELD,
+            InventoryHold.expires_at < until,
+        )
+        .values(expires_at=until)
+    )
+    return int(result.rowcount or 0)
 
 
 def release(session: Session, checkout_id: str) -> int:

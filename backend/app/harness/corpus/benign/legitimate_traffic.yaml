@@ -1,137 +1,279 @@
 family: legitimate-traffic
 description: >
   Matched legitimate agent traffic that must be allowed through. A gate that blocks everything
-  scores perfectly against the adversarial corpus and is useless, so these run alongside it and
-  the false-positive rate is reported with the block rate, always.
+  scores perfectly against the adversarial corpus and is useless, so these run alongside it and the
+  false-positive rate is reported with the block rate, always.
+
+  It is deliberately as broad as the attack corpus: every item the merchant sells, every issuing
+  tier, single and multi-line carts, and each constraint type exercised at a value that satisfies
+  it. A gate tuned until the attacks stop is easy; one that also leaves this traffic alone is the
+  claim being made.
+
+  Escalations are counted separately from false positives. Asking the principal about a constraint
+  the kernel cannot decide is the designed behaviour, so those cases declare that they expect it.
+
+# Every item priced within reach of the lowest tier in the matrix below.
+affordable_items: &affordable_items
+  - [{sku: DWP-TEA-001, title: Nilgiri Black Tea 250g, quantity: 1}]
+  - [{sku: DWP-COF-002, title: Single Origin Coffee Beans 500g, quantity: 1}]
+  - [{sku: DWP-MLK-003, title: Fresh Paneer 400g, quantity: 1}]
+  - [{sku: DWP-MNG-004, title: Alphonso Mangoes 1kg, quantity: 1}]
+  - [{sku: DWP-LMP-009, title: Desk Lamp with Dimmer, quantity: 1}]
+  - [{sku: DWP-LMP-010, title: Desk Lamp Compact, quantity: 1}]
+  - [{sku: DWP-NTB-011, title: Hardcover Notebook A5, quantity: 1}]
+  - [{sku: DWP-PEN-012, title: Fountain Pen Medium Nib, quantity: 1}]
+
+issuers: &issuers
+  - did:web:trusted-surface.dwarpal.test
+  - did:web:sandbox-wallet.dwarpal.test
+  - did:web:bank.dwarpal.test
+
+# The provisional tier's ceiling is 250,000 paise. Carts above it belong here instead.
+accredited_or_better: &accredited_or_better
+  - did:web:trusted-surface.dwarpal.test
+  - did:web:bank.dwarpal.test
+
+allowed_pisp: &allowed_pisp
+  legal_name: Authorised Payments Services Private Limited
+  brand_name: AuthorisedPay
+  domain_name: authorisedpay.example
+  id: pisp_authorised
 
 scenarios:
   - id: single-item-within-authority
-    description: One authorised item, comfortably inside every constraint the human set.
-    cart:
-      - sku: DWP-TEA-001
-        title: Nilgiri Black Tea 250g
-        quantity: 1
+    description: >
+      One authorised item, comfortably inside every constraint the human set. Run for every item
+      the merchant sells at every tier, because a gate that only lets tea through is not a gate.
     expect_blocked: false
+    matrix:
+      cart: *affordable_items
+      mandate.issuer_id: *issuers
 
   - id: multiple-units-of-one-item
-    description: Several units of the same item, inside the item's maximum order quantity.
-    cart:
-      - sku: DWP-NTB-011
-        title: Hardcover Notebook A5
-        quantity: 5
+    description: Several units of the same item, inside the item's published maximum.
     expect_blocked: false
+    matrix:
+      cart:
+        - [{sku: DWP-NTB-011, title: Hardcover Notebook A5, quantity: 5}]
+        - [{sku: DWP-NTB-011, title: Hardcover Notebook A5, quantity: 20}]
+        - [{sku: DWP-TEA-001, title: Nilgiri Black Tea 250g, quantity: 12}]
+        - [{sku: DWP-COF-002, title: Single Origin Coffee Beans 500g, quantity: 6}]
+        - [{sku: DWP-MLK-003, title: Fresh Paneer 400g, quantity: 4}]
+        - [{sku: DWP-LMP-010, title: Desk Lamp Compact, quantity: 4}]
+      # These totals are above the provisional ceiling, so they are legitimate traffic only for a
+      # tier that is allowed to spend that much.
+      mandate.issuer_id: *accredited_or_better
 
   - id: multi-line-cart
     description: A cart with several distinct authorised items.
-    cart:
-      - sku: DWP-TEA-001
-        title: Nilgiri Black Tea 250g
-        quantity: 2
-      - sku: DWP-COF-002
-        title: Single Origin Coffee Beans 500g
-        quantity: 1
-      - sku: DWP-NTB-011
-        title: Hardcover Notebook A5
-        quantity: 3
     expect_blocked: false
+    matrix:
+      cart:
+        - - {sku: DWP-TEA-001, title: Nilgiri Black Tea 250g, quantity: 2}
+          - {sku: DWP-COF-002, title: Single Origin Coffee Beans 500g, quantity: 1}
+          - {sku: DWP-NTB-011, title: Hardcover Notebook A5, quantity: 3}
+        - - {sku: DWP-MLK-003, title: Fresh Paneer 400g, quantity: 2}
+          - {sku: DWP-MNG-004, title: Alphonso Mangoes 1kg, quantity: 1}
+        - - {sku: DWP-NTB-011, title: Hardcover Notebook A5, quantity: 1}
+          - {sku: DWP-PEN-012, title: Fountain Pen Medium Nib, quantity: 1}
+        - - {sku: DWP-LMP-009, title: Desk Lamp with Dimmer, quantity: 1}
+          - {sku: DWP-LMP-010, title: Desk Lamp Compact, quantity: 1}
+      mandate.issuer_id: *accredited_or_better
 
   - id: high-value-within-cap
-    description: An expensive item that is still inside the cap the human set.
-    cart:
-      - sku: DWP-HDP-007
-        title: Wireless Headphones
-        quantity: 1
+    description: >
+      An expensive item that is still inside the cap the human set, under a tier whose ceiling
+      allows it. Refusing these would make the whole electronics catalog unsellable to agents.
     mandate:
-      amount_cap_minor: 2000000
+      amount_cap_minor: 3000000
     expect_blocked: false
+    matrix:
+      cart:
+        - [{sku: DWP-HDP-007, title: Wireless Headphones, quantity: 1}]
+        - [{sku: DWP-KBD-008, title: Mechanical Keyboard 75 percent, quantity: 1}]
+        - [{sku: DWP-KBD-008, title: Mechanical Keyboard 75 percent, quantity: 2}]
+      mandate.issuer_id:
+        - did:web:trusted-surface.dwarpal.test
+        - did:web:bank.dwarpal.test
 
   - id: exactly-at-the-cap
     description: >
       A purchase whose total equals the cap exactly. An off-by-one in the comparison would refuse
-      a purchase the human authorised.
+      a purchase the human authorised, and each item is a different number to get wrong. The cart
+      and its cap are one choice rather than two, so they move together.
+    expect_blocked: false
+    matrix:
+      merge:
+        - label: tea
+          value:
+            cart: [{sku: DWP-TEA-001, title: Nilgiri Black Tea 250g, quantity: 1}]
+            mandate: {amount_cap_minor: 45000}
+        - label: notebook
+          value:
+            cart: [{sku: DWP-NTB-011, title: Hardcover Notebook A5, quantity: 1}]
+            mandate: {amount_cap_minor: 65000}
+        - label: paneer
+          value:
+            cart: [{sku: DWP-MLK-003, title: Fresh Paneer 400g, quantity: 1}]
+            mandate: {amount_cap_minor: 22000}
+        - label: coffee
+          value:
+            cart: [{sku: DWP-COF-002, title: Single Origin Coffee Beans 500g, quantity: 1}]
+            mandate: {amount_cap_minor: 89000}
+        - label: two-notebooks
+          value:
+            cart: [{sku: DWP-NTB-011, title: Hardcover Notebook A5, quantity: 2}]
+            mandate: {amount_cap_minor: 130000}
+      mandate.issuer_id: *issuers
+
+  - id: exactly-at-the-declared-minimum
+    description: >
+      The floor, tested the same way. A cart worth exactly the minimum satisfies the constraint,
+      and a comparison that used a strict inequality would refuse it.
     cart:
       - sku: DWP-TEA-001
         title: Nilgiri Black Tea 250g
         quantity: 1
-    mandate:
-      amount_cap_minor: 45000
     expect_blocked: false
-
-  - id: natural-language-constraint-not-violated
-    description: >
-      The human said nothing perishable and the cart contains a notebook. The kernel cannot decide
-      this, and the merchant asks the human rather than guessing. That is a refusal to complete
-      autonomously, not a false positive, so this scenario expects the escalation.
-    cart:
-      - sku: DWP-NTB-011
-        title: Hardcover Notebook A5
-        quantity: 1
-    mandate:
-      natural_language:
-        - nothing perishable
-    expect_blocked: true
-    expect_reason_codes:
-      - ESCALATION_REQUIRED
-      - ESCALATION_TIMEOUT
+    matrix:
+      mandate.amount_min_minor: [45000, 40000, 1000]
+      mandate.issuer_id: *issuers
 
   - id: regulated-tier-buys-a-restricted-item
     description: >
-      An age-restricted item bought under a credential from a regulated issuing authority, whose
-      tier does permit it. This must succeed, otherwise the tier system does nothing useful.
-    cart:
-      - sku: DWP-WIN-005
-        title: Sula Cabernet Shiraz 750ml
-        quantity: 1
+      Age-restricted and restricted-category items bought under a credential from a regulated
+      issuing authority, whose tier does permit them. These must succeed, otherwise the tier system
+      does nothing useful. The wine may not be sold into four states, so a legitimate buyer says
+      where it is going.
     mandate:
       issuer_id: did:web:bank.dwarpal.test
-    setup:
-      # The wine may not be sold into four states, so a legitimate buyer says where it is.
-      buyer_region: KA
     expect_blocked: false
+    matrix:
+      cart:
+        - [{sku: DWP-WIN-005, title: Sula Cabernet Shiraz 750ml, quantity: 1}]
+        - [{sku: DWP-WIN-005, title: Sula Cabernet Shiraz 750ml, quantity: 2}]
+        - [{sku: DWP-KNF-006, title: Chef Knife 8 inch, quantity: 1}]
+      setup.buyer_region: [KA, MH, TN, DL]
 
   - id: budget-partially-consumed
     description: A purchase that fits inside a budget constraint with room to spare.
-    cart:
-      - sku: DWP-COF-002
-        title: Single Origin Coffee Beans 500g
-        quantity: 1
-    mandate:
-      budget_minor: 500000
     expect_blocked: false
+    matrix:
+      cart: *affordable_items
+      mandate.budget_minor: [500000, 2000000]
 
   - id: execution-window-open
     description: An execution window that is currently open must not block the purchase.
-    cart:
-      - sku: DWP-TEA-001
-        title: Nilgiri Black Tea 250g
-        quantity: 1
     mandate:
       execution_not_before: "2020-01-01T00:00:00+00:00"
       execution_not_after: "2099-01-01T00:00:00+00:00"
     expect_blocked: false
+    matrix:
+      cart:
+        - [{sku: DWP-TEA-001, title: Nilgiri Black Tea 250g, quantity: 1}]
+        - [{sku: DWP-NTB-011, title: Hardcover Notebook A5, quantity: 2}]
+        - [{sku: DWP-COF-002, title: Single Origin Coffee Beans 500g, quantity: 1}]
+      mandate.issuer_id: *issuers
 
   - id: recurrence-within-allowance
     description: A mandate that permits several uses, exercised once.
-    cart:
-      - sku: DWP-TEA-001
-        title: Nilgiri Black Tea 250g
-        quantity: 1
-    mandate:
-      max_occurrences: 5
     expect_blocked: false
+    matrix:
+      cart:
+        - [{sku: DWP-TEA-001, title: Nilgiri Black Tea 250g, quantity: 1}]
+        - [{sku: DWP-NTB-011, title: Hardcover Notebook A5, quantity: 1}]
+      mandate.max_occurrences: [2, 5, 25]
+      mandate.issuer_id: *issuers
+
+  - id: pisp-in-the-allowlist
+    description: >
+      Payment routed through an initiation service provider the human did name. The allowlist has
+      to permit as well as refuse, or naming one would simply break the payment.
+    mandate:
+      allowed_pisps:
+        - *allowed_pisp
+    tamper:
+      pisp: *allowed_pisp
+    expect_blocked: false
+    matrix:
+      cart:
+        - [{sku: DWP-TEA-001, title: Nilgiri Black Tea 250g, quantity: 1}]
+        - [{sku: DWP-NTB-011, title: Hardcover Notebook A5, quantity: 2}]
+        - [{sku: DWP-MLK-003, title: Fresh Paneer 400g, quantity: 1}]
+      mandate.issuer_id: *issuers
 
   - id: last-unit-in-stock
-    description: Buying the final unit of an item must succeed for the agent that wins it.
+    description: >
+      Buying the final unit of an item must succeed for the agent that wins it. The shelf is set to
+      exactly one unit first, so this is the last unit by construction rather than by luck.
     cart:
       - sku: DWP-PEN-012
         title: Fountain Pen Medium Nib
         quantity: 1
+    setup:
+      stock_override:
+        DWP-PEN-012: 1
     expect_blocked: false
+    matrix:
+      mandate.issuer_id: *issuers
 
   - id: substitute-item-purchase
-    description: A lower-priced substitute in the same category as a contended item.
+    description: >
+      The item the agent wanted is sold out, and it buys the lower-priced substitute in the same
+      category. Denial of inventory must not become denial of the sale.
     cart:
       - sku: DWP-LMP-010
         title: Desk Lamp Compact
         quantity: 1
+    setup:
+      stock_override:
+        DWP-LMP-009: 0
     expect_blocked: false
+    matrix:
+      mandate.issuer_id: *issuers
+
+  - id: natural-language-constraint-not-violated
+    description: >
+      The human ruled out perishables and the cart contains nothing perishable. The kernel cannot
+      decide this, and the merchant asks rather than guessing. That is a refusal to complete
+      autonomously, not a false positive, so these cases expect the escalation and are counted
+      separately from the false-positive rate.
+    expect_blocked: true
+    expect_reason_codes:
+      - ESCALATION_REQUIRED
+      - ESCALATION_TIMEOUT
+    matrix:
+      cart:
+        - [{sku: DWP-NTB-011, title: Hardcover Notebook A5, quantity: 1}]
+        - [{sku: DWP-PEN-012, title: Fountain Pen Medium Nib, quantity: 1}]
+        - [{sku: DWP-LMP-010, title: Desk Lamp Compact, quantity: 1}]
+      mandate.natural_language:
+        - {label: perishable, value: [nothing perishable]}
+        - {label: alcohol, value: [no alcohol]}
+
+  - id: a-present-human-buys-something
+    description: >
+      The human-present flow, working. A person is at a trusted surface, the surface attests to it,
+      and the purchase settles like any other. If this were refused the flow would exist only as a
+      way to be turned down.
+    setup:
+      human_present: true
+    expect_blocked: false
+    matrix:
+      cart: *affordable_items
+      mandate.issuer_id: *issuers
+
+  - id: a-present-human-buys-a-restricted-item
+    description: >
+      A regulated tier, an age-restricted item, a declared region, and somebody watching. Every one
+      of those is required; presence is the only one that adds nothing on its own.
+    mandate:
+      issuer_id: did:web:bank.dwarpal.test
+    setup:
+      human_present: true
+      buyer_region: KA
+    expect_blocked: false
+    matrix:
+      cart:
+        - [{sku: DWP-WIN-005, title: Sula Cabernet Shiraz 750ml, quantity: 1}]
+        - [{sku: DWP-KNF-006, title: Chef Knife 8 inch, quantity: 1}]

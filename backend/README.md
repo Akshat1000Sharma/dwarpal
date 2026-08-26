@@ -51,7 +51,7 @@ tools/            the standalone evidence verifier, which imports nothing from a
 
 ```bash
 python -m venv .venv
-.venv/Scripts/activate
+.venv/Scripts/activate    # source .venv/bin/activate on macOS or Linux
 pip install -r requirements.txt
 cp .env.example .env
 ```
@@ -111,7 +111,7 @@ Dwarpal, and validates every credential against the published AP2 schemas before
 
 ## The scenario suite
 
-Eleven suites driven over HTTP against a running merchant. Where the corpus fires attack families
+Twelve suites driven over HTTP against a running merchant. Where the corpus fires attack families
 as data, this proves the same guarantees hold through the real endpoint, under real concurrency,
 across many agents, for as long as you ask.
 
@@ -119,6 +119,7 @@ across many agents, for as long as you ask.
 python scenarios/run_suite.py --profile smoke      # a fast configuration check
 python scenarios/run_suite.py --profile standard   # what CI runs
 python scenarios/run_suite.py --profile demo       # fill the dashboard with data
+python scenarios/run_suite.py --profile full        # every case, which the root README quotes
 python scenarios/run_suite.py --profile soak --minutes 20
 python scenarios/run_suite.py --suite s03 s06      # only those
 ```

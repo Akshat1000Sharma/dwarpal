@@ -20,6 +20,8 @@ RECEIPT_JWT_TYP = "ap2-receipt+jwt"
 VERDICT_JWT_TYP = "dwarpal-verdict+jwt"
 EVIDENCE_JWT_TYP = "dwarpal-evidence+jwt"
 POLICY_TERMS_JWT_TYP = "dwarpal-policy+jwt"
+PRESENCE_JWT_TYP = "dwarpal-presence+jwt"
+CONFIRMATION_JWT_TYP = "dwarpal-confirmation+jwt"
 
 
 class Vct(StrEnum):
@@ -105,12 +107,8 @@ DETERMINISTIC_CONSTRAINTS: frozenset[str] = frozenset(
     }
 )
 
-# A Dwarpal extension: the open Checkout Mandate may carry constraints the human expressed in
-# prose. These are never evaluated by the kernel.
-#
-# They live in their own top-level claim rather than inside the AP2 "constraints" array, because
-# the published open_checkout_mandate schema constrains that array to the two AP2 constraint types
-# and a foreign entry would make the credential non-conformant. Keeping the extension outside it
-# means every credential Dwarpal issues and accepts still validates against the published schema.
+# A Dwarpal extension: constraints the human expressed in prose, never evaluated by the kernel.
+# They sit in their own top-level claim rather than the AP2 "constraints" array, because the
+# published schema pins that array to two types and a foreign entry would fail validation.
 NATURAL_LANGUAGE_CONSTRAINT = "dwarpal.natural_language"
 EXTENSION_CONSTRAINTS_CLAIM = "dwarpal_constraints"

@@ -77,7 +77,7 @@ class Representment:
 
 
 def _factors(body: dict[str, Any]) -> list[EvidenceFactor]:
-    """The named checks. Weights sum to 100."""
+    """The named checks. Weights are relative and scored against what was achievable."""
     chain = body.get("credential_chain") or {}
     verification = body.get("verification") or {}
     checkout = body.get("checkout") or {}

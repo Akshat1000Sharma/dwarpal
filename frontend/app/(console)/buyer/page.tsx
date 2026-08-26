@@ -102,6 +102,27 @@ export default async function BuyerPage() {
               </p>
             </fieldset>
 
+            <fieldset>
+              <legend className="mb-2 text-[12px] font-medium text-ink">Which AP2 flow</legend>
+              <label className="inline-flex cursor-pointer items-start gap-2.5 rounded-[9px] border border-line bg-surface px-3 py-2.5 text-[12px] text-body transition-colors hover:bg-sunken has-checked:border-brand has-checked:bg-brand-tint">
+                <input
+                  type="checkbox"
+                  name="human_present"
+                  className="mt-0.5 h-3.5 w-3.5 accent-[color:var(--brand)]"
+                />
+                <span>
+                  <span className="font-medium text-ink">I am at the keyboard for this one</span>
+                  <span className="mt-1 block text-[11.5px] leading-relaxed text-faint">
+                    Switches to AP2&apos;s human-present flow. The trusted surface signs an
+                    attestation bound to this exact cart, and the merchant verifies it like any
+                    other credential: right signer, right cart, recent, and usable once. It changes
+                    nothing about what you are allowed to buy. Leave it unticked and the run is
+                    human-not-present, which is the flow everything else here is about.
+                  </span>
+                </span>
+              </label>
+            </fieldset>
+
             <button
               type="submit"
               className="w-full rounded-[9px] bg-brand px-4 py-3 text-[13px] font-medium text-white transition-colors hover:bg-brand-strong sm:w-auto sm:px-6"

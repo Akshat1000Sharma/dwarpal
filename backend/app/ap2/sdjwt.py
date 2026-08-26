@@ -3,7 +3,7 @@
 Implemented here rather than taken from the reference SDK because the adversarial corpus has to
 forge signatures, strip disclosures, swap holder keys and re-bind tokens at the byte level. A
 high-level SDK deliberately makes those things impossible, which would leave the attack families
-in specification section 12 untestable.
+the adversarial corpus depends on untestable.
 
 Wire format:
 

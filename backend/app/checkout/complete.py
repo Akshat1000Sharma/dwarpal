@@ -19,6 +19,7 @@ The ordering rules it enforces:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -241,6 +242,27 @@ def _receipt(
     return body, sign_jws(body, merchant_key(), typ=RECEIPT_JWT_TYP)
 
 
+# How long past an escalation's deadline the Checkout stays alive, so the agent can present again
+# once the answer arrives. An answer can land on the deadline itself.
+ESCALATION_SETTLEMENT_GRACE_SECONDS = 120
+
+# How long a hold is pushed out for once the sale is approved, to cover the gateway round trip.
+PAYMENT_WINDOW_SECONDS = 300
+
+# States a Checkout cannot be decided out of again, because money has moved or is committed to
+# move. QUOTED, SIGNED and REFUSED are absent on purpose: nothing was charged, so a corrected
+# presentation against the same Checkout is a legitimate retry.
+SETTLED_STATES: frozenset[str] = frozenset(
+    {
+        CheckoutState.COMPLETING,
+        CheckoutState.AWAITING_PAYMENT,
+        CheckoutState.COMPLETED,
+        CheckoutState.COMPENSATED,
+        CheckoutState.CANCELLED,
+    }
+)
+
+
 def complete(
     session: Session,
     credentials: PresentedCredentials,
@@ -391,6 +413,36 @@ def _decide(
     assert authority is not None
     agent_id = authority.agent_id
     row = authority.session_row
+
+    # A Checkout is decided once. Fresh closed mandates over the same merchant-signed Checkout are
+    # not replays, so the credential chain cannot stop a second attempt; the row lock can, and two
+    # completions arriving together serialise here rather than both finding it undecided.
+    session.refresh(row, with_for_update=True)
+    if row.state in SETTLED_STATES:
+        verdict = refuse(
+            ReasonCode.CHECKOUT_ALREADY_SETTLED,
+            KernelAction.CHECKOUT,
+            agent_id,
+            correlation_id=correlation_id,
+            amount_minor=row.total_minor,
+            currency=row.currency,
+            checkout_id=row.id,
+            evidence={"checkout_id": row.id, "state": row.state},
+        )
+        verdict_row = record_verdict(session, verdict)
+        packet_id = file_evidence(
+            "refused_already_settled", {"checkout_id": row.id, "state": row.state}
+        )
+        return CompletionOutcome(
+            status="refused",
+            reason_code=ReasonCode.CHECKOUT_ALREADY_SETTLED,
+            http_status=status_for(ReasonCode.CHECKOUT_ALREADY_SETTLED),
+            checkout_id=row.id,
+            verdict_id=verdict_row.id,
+            detail={"checkout_id": row.id, "state": row.state},
+            evidence_packet_id=packet_id,
+        )
+
     row.correlation_id = correlation_id
     mandate = _upsert_open_mandate(session, authority)
     row.mandate_id = mandate.id
@@ -431,6 +483,7 @@ def _decide(
         policy_hash_acknowledged=authority.policy_hash,
         buyer_region=buyer_region,
         verified=True,
+        human_present=authority.human_present,
         correlation_id=correlation_id,
     )
     kernel_result = kernel.evaluate(session, kernel_input)
@@ -516,8 +569,19 @@ def _decide(
                 currency=row.currency,
                 fingerprint=row.cart_fingerprint,
                 cart_summary=_cart_summary(row),
+                issuer_id=mandate.issuer_id,
                 transport=whatsapp,
+                notify=not authority.human_present,
             )
+        # The deadline the human is given is longer than the quote TTL, so without this the cart
+        # and its stock lapse first and an approval given inside the advertised window comes back
+        # to an expired quote. The grace covers the agent's round trip after the answer arrives.
+        keep_until = existing.deadline_at + timedelta(seconds=ESCALATION_SETTLEMENT_GRACE_SECONDS)
+        if row.expires_at < keep_until:
+            row.expires_at = keep_until
+        inventory.extend(session, row.id, keep_until)
+        session.flush()
+
         settled = escalation_service.resolve(
             session, existing.id, current_fingerprint=row.cart_fingerprint
         )
@@ -601,6 +665,46 @@ def _decide(
             evidence_packet_id=packet_id,
         )
 
+    # A refusal releases this Checkout's holds and the TTL expires them, and neither state refuses a
+    # later presentation. Selling then would take payment for stock nobody reserved, and consume()
+    # would find nothing to decrement, so the shelf would go negative silently.
+    reserved_units = inventory.held_units(session, row.id)
+    if reserved_units <= 0:
+        verdict_row = record_verdict(
+            session,
+            refuse(
+                ReasonCode.INVENTORY_UNAVAILABLE,
+                KernelAction.CHECKOUT,
+                agent_id,
+                correlation_id=correlation_id,
+                amount_minor=row.total_minor,
+                currency=row.currency,
+                checkout_id=row.id,
+                mandate_id=mandate.id,
+                evidence={"checkout_id": row.id, "held_units": 0},
+            ),
+        )
+        if reservation_id:
+            budget.release(session, reservation_id)
+        row.state = CheckoutState.REFUSED
+        session.flush()
+        packet_id = file_evidence("refused_inventory_lapsed", authority.as_evidence())
+        return CompletionOutcome(
+            status="refused",
+            reason_code=ReasonCode.INVENTORY_UNAVAILABLE,
+            http_status=status_for(ReasonCode.INVENTORY_UNAVAILABLE),
+            checkout_id=row.id,
+            verdict_id=verdict_row.id,
+            detail={"checkout_id": row.id, "reason": "the hold on this cart is no longer in force"},
+            evidence_packet_id=packet_id,
+        )
+
+    # The decision to sell is made here, so the stock stops being merely held and starts being
+    # owed. Capture is a network round trip against the gateway, and a hold that lapsed during it
+    # would be expired out from under this sale by the next agent to quote the same item.
+    inventory.extend(session, row.id, utcnow() + timedelta(seconds=PAYMENT_WINDOW_SECONDS))
+    session.flush()
+
     # ---- the approving verdict. Nothing above this line has moved money. ----------------------
     approval = kernel_result.verdict
     if escalation_required:
@@ -672,10 +776,9 @@ def _decide(
     timings.finish(step)
 
     if payment.status != PaymentStatus.CAPTURED:
-        # The Credential Provider is out of scope and mocked, so in a live Razorpay run there
-        # is nothing here that can pay the order. Reporting this as completed would be untrue,
-        # so the order is returned for payment and the signed webhook finalises it. The budget
-        # reservation stays held and expires on its own if the payment never arrives.
+        # The Credential Provider is mocked, so nothing here can pay a live Razorpay order.
+        # Reporting it completed would be untrue: the order is returned for payment, the signed
+        # webhook finalises it, and the budget reservation expires on its own if it never arrives.
         row.state = CheckoutState.AWAITING_PAYMENT
         session.flush()
         packet_id = file_evidence("awaiting_payment", authority.as_evidence())
@@ -777,7 +880,24 @@ def _decide(
         amount_minor=row.total_minor,
         currency=row.currency,
     )
-    inventory.consume(session, row.id)
+    consumed = inventory.consume(session, row.id)
+    if consumed <= 0:
+        # The money is already captured, so this cannot be turned into a refusal here. What it must
+        # not do is pass silently: a completed sale that decremented no stock is an oversell, and an
+        # operator has to see it rather than find it in a stock count later.
+        session.add(
+            PaymentException(
+                correlation_id=correlation_id,
+                payment_id=payment.id,
+                kind="inventory_not_consumed_after_capture",
+                local_state={"checkout_id": row.id, "reserved_units": reserved_units},
+                gateway_state={"consumed_holds": consumed},
+            )
+        )
+        logger.error(
+            "captured a payment whose inventory hold was gone",
+            extra={"context": {"checkout_id": row.id, "correlation_id": correlation_id}},
+        )
     row.state = CheckoutState.COMPLETED
     session.flush()
 

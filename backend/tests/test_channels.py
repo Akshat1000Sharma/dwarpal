@@ -10,11 +10,14 @@ Nothing here contacts Meta. The one function that makes a request is replaced.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 import pytest
+from sqlalchemy.orm import Session
 
 from app import channels
+from app.db.models import utcnow
 from app.settings import settings
 
 
@@ -257,3 +260,105 @@ def test_a_payload_with_no_metadata_is_still_read() -> None:
     }
     answers = whatsapp.parse_inbound(payload, phone_number_id="1298154706713126")
     assert len(answers) == 1 and answers[0].answer == "deny"
+
+
+# --------------------------------------------------------------- who is allowed to answer
+
+
+def _pending(db: Session, sent_to: str | None) -> str:
+    """An escalation waiting for an answer, addressed to a particular handset."""
+    from app.db.models import Escalation
+
+    row = Escalation(
+        id="esc-sender-check",
+        correlation_id="corr-sender-check",
+        checkout_id="chk-sender-check",
+        agent_id="agent-under-test",
+        constraint_text="only if it is the good stuff",
+        raised_reason="SEMANTIC_ESCALATION",
+        amount_minor=250000,
+        cart_fingerprint="fp-sender-check",
+        deadline_at=utcnow() + timedelta(minutes=30),
+        sent_to=sent_to,
+    )
+    db.add(row)
+    db.flush()
+    return row.id
+
+
+def test_only_the_number_that_was_asked_can_answer(db: Session, monkeypatch) -> None:
+    """The escalation id travels back to the agent in its own 202 response.
+
+    A plain "approve <id>" text is a valid answer, so if the sender were not checked, the agent
+    that triggered the escalation could approve itself from any handset it controls. Nothing else
+    on this path authenticates the answer: Meta's webhook signature proves the message came from
+    Meta, not that it came from the person who was asked.
+    """
+    from app.escalation import service as escalation_service
+
+    monkeypatch.setattr(settings, "ESCALATION_HUMAN_WHATSAPP", "+919876543210")
+    escalation_id = _pending(db, sent_to="+919876543210")
+
+    outcome = escalation_service.record_answer(
+        db, escalation_id, "approve", from_number="+917067466990"
+    )
+
+    assert not outcome.accepted
+    assert outcome.ignored_reason == "sender_is_not_the_principal"
+    assert outcome.status == "pending"
+
+
+def test_the_number_that_was_asked_is_obeyed(db: Session, monkeypatch) -> None:
+    from app.escalation import service as escalation_service
+
+    monkeypatch.setattr(settings, "ESCALATION_HUMAN_WHATSAPP", "+919876543210")
+    escalation_id = _pending(db, sent_to="+919876543210")
+
+    outcome = escalation_service.record_answer(
+        db, escalation_id, "approve", from_number="+91 98765 43210"
+    )
+
+    assert outcome.accepted
+    assert outcome.status == "approved"
+
+
+def test_an_answer_to_an_escalation_that_reached_nobody_is_not_applied(
+    db: Session, monkeypatch
+) -> None:
+    """Delivery can fail, and then there is no principal to have answered."""
+    from app.escalation import service as escalation_service
+
+    monkeypatch.setattr(settings, "ESCALATION_HUMAN_WHATSAPP", "")
+    escalation_id = _pending(db, sent_to=None)
+
+    outcome = escalation_service.record_answer(
+        db, escalation_id, "approve", from_number="+917067466990"
+    )
+
+    assert not outcome.accepted
+    assert outcome.ignored_reason == "sender_is_not_the_principal"
+
+
+def test_a_sender_that_is_not_a_number_at_all_is_refused(db: Session, monkeypatch) -> None:
+    from app.escalation import service as escalation_service
+
+    monkeypatch.setattr(settings, "ESCALATION_HUMAN_WHATSAPP", "+919876543210")
+    escalation_id = _pending(db, sent_to="+919876543210")
+
+    outcome = escalation_service.record_answer(db, escalation_id, "approve", from_number="not-a-number")
+
+    assert not outcome.accepted
+    assert outcome.ignored_reason == "sender_is_not_the_principal"
+
+
+def test_the_refused_attempt_is_still_recorded(db: Session, monkeypatch) -> None:
+    """An impersonation attempt is evidence, so it is written down rather than dropped."""
+    from app.db.models import EscalationResponse
+    from app.escalation import service as escalation_service
+
+    monkeypatch.setattr(settings, "ESCALATION_HUMAN_WHATSAPP", "+919876543210")
+    escalation_id = _pending(db, sent_to="+919876543210")
+    escalation_service.record_answer(db, escalation_id, "approve", from_number="+917067466990")
+
+    rows = db.query(EscalationResponse).filter_by(escalation_id=escalation_id).all()
+    assert [r.ignored_reason for r in rows] == ["sender_is_not_the_principal"]

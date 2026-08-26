@@ -91,7 +91,8 @@ jobs:
         run: python -m app.cli reports
 
       # The reports step commits its packets to a separate database, so the export names it.
-      # --min-packets makes an empty chain a failure: verifying nothing is not a pass.
+      # --min-packets makes an empty chain a failure: verifying nothing is not a pass. The floor
+      # tracks the corpus, which files a packet per case.
       - name: Verify the evidence chain with the application stopped
         run: |
           python -m app.cli --database "${DB_NAME}_reports" \
@@ -100,7 +101,7 @@ jobs:
           python tools/verify_evidence.py \
             --jsonl reports/evidence.jsonl \
             --jwks reports/merchant_jwks.json \
-            --min-packets 40
+            --min-packets 400
 
       - name: Upload conformance and scorecard reports
         if: always()
@@ -183,6 +184,12 @@ jobs:
 
       - name: Run the scenario suite against it
         run: python scenarios/run_suite.py --base http://127.0.0.1:8000 --profile standard
+
+      # The five tools the published AP2 shopping agent calls, driven over a real MCP session. This
+      # needs no ADK, no uv and no API key, so the merchant interface that agent uses is checked on
+      # every push even though the agent itself is not.
+      - name: Drive the reference-agent tool surface
+        run: python interop/reference_agent/drive_reference_tools.py --base http://127.0.0.1:8000
 
       - name: Merchant log
         if: failure()

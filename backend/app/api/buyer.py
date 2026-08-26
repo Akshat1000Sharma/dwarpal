@@ -54,6 +54,7 @@ class RunBody(BaseModel):
     budget_cap_minor: int | None = Field(default=None, ge=0, le=100_000_000)
     natural_language: list[str] = Field(default_factory=list)
     connection_id: str | None = None
+    human_present: bool = False
 
 
 class PayBody(BaseModel):
@@ -110,6 +111,7 @@ def start_run(body: RunBody, db: Annotated[Session, Depends(get_db)]) -> dict[st
         prompt=body.prompt,
         budget_cap_minor=body.budget_cap_minor,
         natural_language=list(body.natural_language),
+        human_present=body.human_present,
         connection_id=body.connection_id,
     )
     run = runner.create_run(db, request)
@@ -185,10 +187,9 @@ def pay_run(
     ):
         raise HTTPException(status_code=401, detail="the Razorpay handler signature did not verify")
 
-    # FOR UPDATE, because the signed webhook for this same order can be in flight on another
-    # worker right now. Without the lock both readers see AUTHORIZED, both pass the CAPTURED
-    # guard below, and both capture. populate_existing re-reads the row rather than handing back
-    # a stale identity-map copy taken before the lock was granted.
+    # FOR UPDATE, because the signed webhook for this order may be in flight on another worker:
+    # without it both readers see AUTHORIZED, pass the guard below, and capture. populate_existing
+    # re-reads the row rather than handing back a copy taken before the lock was granted.
     payment = db.scalar(
         select(Payment)
         .where(Payment.razorpay_order_id == body.razorpay_order_id)

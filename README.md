@@ -48,6 +48,13 @@ categories.
 nothing to authenticate against, and the page says so. Dwarpal's real boundaries are the credential
 chain an agent presents and the merchant token the dashboard sends from the server.
 
+That has a consequence worth stating plainly rather than leaving to be discovered. The dashboard
+holds the merchant token server-side and attaches it to everything it proxies, so **anybody who can
+reach the dashboard's origin holds merchant authority**, including the call that mints an agent
+connection token. The proxy refuses cross-site requests, so another website cannot drive it through
+a visitor's browser, but that is not a substitute for a login. Run it bound to localhost, as the
+development commands below do, and put your own authentication in front of it before exposing it.
+
 | Console | Route | What it is for |
 |---|---|---|
 | Buyer | `/buyer` | Ask an agent to buy something, watch its log, pay with the test card |
@@ -132,6 +139,10 @@ There is no function in the codebase that turns model output into an approval, s
 jailbroken model degrades the system to asking the human more often, never to moving more money.
 The deliberate consequence is that a natural-language constraint the model does not find violated
 goes to the human rather than through.
+
+The invariant is worth stating exactly, because the loose version of it is wrong: **a model is used
+in exactly one place on the merchant's side.** Not one place in the repository. There is a second
+one, and it is on the other side of the counter.
 
 **The buyer's side.** The shopping agent is model-driven on purpose. Choosing what to buy is a
 judgement call where being wrong costs the buyer a wrong item. Deciding whether to allow it is not,
@@ -220,6 +231,54 @@ expired mandate, a constraint arithmetic cannot settle, a model that is unsure, 
 answer, an unreachable gateway, an undeclared region for a region-locked item. None of them produce
 an approval.
 
+## When the human is present
+
+AP2 has two flows, and everything above is the harder one: the human is not there, and the merchant
+has to establish that an agent stayed inside an authority granted in advance. The other flow is the
+one where somebody is at the keyboard.
+
+Dwarpal supports it, and the design is one sentence: **presence is a claim the merchant verifies,
+never a flag it trusts, and it widens nothing.**
+
+A checkout may carry a fifth credential, a presence attestation signed by the trusted surface the
+person is actually at:
+
+```
+   {  "typ": "dwarpal-presence+jwt",
+      "iss": the trusted surface, which must resolve in the trust registry
+      "sub": the human principal
+      "checkout_hash": this Checkout, and no other
+      "method": how the surface observed them
+      "iat":  when it observed them,  "nonce": so it works once
+   }
+```
+
+Verification is step 8 of the pipeline, and it refuses on four counts, each with its own reason
+code: a signature no trusted surface could have produced, an issuer the registry does not know, an
+attestation older than `PRESENCE_MAX_AGE_SECONDS`, and one bound to a different Checkout. Presenting
+it twice is refused as a replay.
+
+What presence does not do is the point of it. The kernel evaluates an attempt carrying one exactly
+as it evaluates one without: the same cap, the same budget, the same velocity and structuring
+windows, the same category gates, the same kill switch, the same revocation check. A present person
+buying above the cap they themselves signed is refused for the cap, with the same reason code an
+absent buyer would get.
+
+The one thing it changes is who answers a question the kernel could not settle. Without presence, an
+unresolved constraint goes to WhatsApp and waits against a deadline. With it, sending a message to
+somebody sitting in front of the screen is theatre, so the escalation comes back in the response and
+is answered at `POST /checkout/confirm`.
+
+That answer is held to the same standard as the attestation. It must be signed by **the same
+trusted surface that issued the mandate being spent**, not merely by somebody in the trust registry:
+one authority cannot answer a question put to another, and a Checkout with no mandate recorded
+against it accepts no answer at all. It must be inside its own expiry, and it must name both this
+escalation and this Checkout. The deadline, the answered-once rule and the void-if-the-cart-changed
+rule are then the same code either way, so an approval remains a human signature rather than a
+boolean the agent supplies.
+
+Tick **I am at the keyboard for this one** in the buyer console to watch it happen.
+
 ## The credentials an agent presents
 
 AP2 separates two questions and answers each at two moments. The open mandates are the standing
@@ -298,17 +357,25 @@ on issue and on accept.
 
 # Testing
 
-Four layers, and they test different things on purpose. The fast suite proves each guarantee in
-isolation. The corpus fires attack families as data. The scenario suite proves the same guarantees
-hold through the real HTTP surface under concurrency. The soak proves they still hold at volume.
+Five layers, and they test different things on purpose. The fast suite proves each guarantee in
+isolation. The corpus fires attack techniques as data, each against many items, tiers and amounts.
+The scenario suite proves the same guarantees hold through the real HTTP surface under concurrency.
+The soak proves they still hold at volume. The interop layer proves an outside client can transact.
 
 | Layer | Command | Size | What it is for |
 |---|---|---|---|
-| Unit and integration | `pytest` | 231 tests | Every guarantee, in isolation, in process |
-| Adversarial corpus | `python -m app.cli reports` | 47 scenarios | Attack families as data, plus a matched benign corpus |
-| Scenario suite | `python scenarios/run_suite.py` | 90 cases, 11 suites | The same guarantees over HTTP, under real concurrency |
+| Unit and integration | `pytest` | 337 tests | Every guarantee, in isolation, in process |
+| Adversarial corpus | `python -m app.cli reports` | 633 cases, 63 techniques | Attack techniques as data, plus 176 cases of matched benign traffic |
+| Scenario suite | `python scenarios/run_suite.py --profile full` | 114 cases, 12 suites | The same guarantees over HTTP, under real concurrency |
 | Soak | `pytest -m soak` | 9 cases | The same guarantees at volume |
-| Interop | `python interop/run_interop.py` | 4 scenarios | A live AP2 client against a running merchant |
+| Interop | `python interop/run_interop.py` | 5 scenarios, 34 checks | A live AP2 client against a running merchant |
+| Reference agent | `scripts/run_reference_agent.sh` | 13 steps | The published AP2 shopping agent, against this merchant |
+
+**A technique is one attack idea. A case is that idea executed against one item, issuing tier and
+amount.** They are counted separately everywhere, and neither stands in for the other: 63 techniques
+is the honest measure of how many distinct attacks are covered, and 633 cases is the honest measure
+of how many times the gate was actually made to decide. Every case runs end to end against the real
+verification pipeline, the real kernel and the real evidence locker.
 
 ## Results, recorded
 
@@ -318,8 +385,13 @@ the misses are named rather than summarised away.
 ### The fast suite
 
 ```
-231 passed, 9 deselected in 118.21s
+337 passed, 818 deselected in 278.13s
 ```
+
+The deselected ones are the soak, and the full corpus matrix. `pytest` runs one case per attack
+technique, because its fixture truncates and re-seeds the database for each test and running all
+633 that way would make the everyday suite unusable. The full matrix is what
+`python -m app.cli reports` executes, and `pytest -m corpus_matrix` runs it here on demand.
 
 The suite requires PostgreSQL and fails with an instruction rather than skipping: the budget and
 inventory guarantees are tested against real row-level locking, and a suite that quietly skipped
@@ -332,7 +404,7 @@ developer's machine.
 ### The attack scorecard
 
 ```
-attack scorecard: 35/35 blocked, 0 missed, 0/12 false positives
+attack scorecard: 633/633 blocked across 63 techniques, 0 missed, 0/176 false positives
 ```
 
 Both numbers, always together. A gate that refuses everything scores perfectly on the first and is
@@ -343,54 +415,64 @@ cannot decide is the designed behaviour, not an error.
 ### The dispute defence rate
 
 ```
-dispute defence: 8/10 defensible with evidence, 0/10 without, improvement 80.0%
-  REFUND RECOMMENDED revoked-after-capture (score 0)
-  REFUND RECOMMENDED no-evidence-retained (score 0)
+dispute defence: 180/204 defensible with evidence, 0/204 without, improvement 88.2%
+  REFUND RECOMMENDED revoked-after-capture-dwp-tea-001 (score 0)
+  REFUND RECOMMENDED no-evidence-retained-dwp-tea-001 (score 0)
+  ... 24 in total, each named in the report
 ```
 
-The two refund recommendations are the point of the exercise. A responder that recommends contesting
-everything is worthless, so the cases where the merchant holds evidence and the responder still says
-refund are printed by name.
+The batch is every catalog item against fifteen real chargeback claims, plus the two variants where
+the evidence is deliberately weak: a purchase compensated after the mandate was revoked, and a
+merchant that retained nothing. The twenty-four refund recommendations are the point of the
+exercise. A responder that recommends contesting everything is worthless, so the cases where the
+merchant holds evidence and the responder still says refund are printed by name.
 
 ### The scenario suite
 
 ```
-s01  Purchase lifecycle                           PASS  12/12
-s02  Credential attacks                           PASS  14/14
-s03  Budget under concurrency                     PASS   5/5
-s04  Inventory contention                         PASS   6/6
-s05  Structuring and velocity                     PASS   7/7
-s06  Revocation races                             PASS   6/6
-s07  Escalation and the model boundary            PASS   9/9
-s08  Idempotency and webhooks                     PASS   9/9
-s09  Evidence and disputes                        PASS   8/8
-s10  The degraded path                            PASS   8/8
-s11  Soak: mixed traffic                          PASS   6/6
+s01  Purchase lifecycle                           PASS  12/12 in  15.8s
+s02  Credential attacks                           PASS  25/25 in   5.6s
+s03  Budget under concurrency                     PASS   5/5 in   3.6s
+s04  Inventory contention                         PASS   6/6 in   2.6s
+s05  Structuring and velocity                     PASS   7/7 in  11.3s
+s06  Revocation races                             PASS   6/6 in   2.3s
+s07  Escalation and the model boundary            PASS   9/9 in  10.9s
+s08  Idempotency and webhooks                     PASS   9/9 in   1.4s
+s09  Evidence and disputes                        PASS   8/8 in   1.1s
+s10  The degraded path                            PASS   8/8 in   0.5s
+s11  Soak: mixed traffic                          PASS   6/6 in  60.9s
+s12  The human-present flow                       PASS  13/13 in  22.8s
 
-90/90 cases passed across 11 suites in 76.0s
+114/114 cases passed across 12 suites in 139.7s
 ```
 
 Every case declares what it proves and what it expects **before** it runs, and both go into the
 report, so a case that quietly stopped proving anything is visible rather than merely green.
 Failures are printed and written to the artifact every time.
 
+The timings move between runs and the pass counts do not. Suites that put a prose constraint in
+front of the merchant, s07 and s12 above, call the live model, so their wall clock follows whatever
+Gemini is doing that minute. The pytest corpus uses the deterministic offline classifier instead,
+which is why it is reproducible and why the scorecard says plainly what that does and does not
+prove.
+
 ### The soak
 
 ```
-9 passed, 231 deselected in 61.95s
+9 passed, 1146 deselected in 132.38s
 
-25.65s  a batch of purchases and attacks settles correctly
-15.22s  a batch of disputes is scored and not all contested
- 4.03s  the chain holds over a long run and verifies offline
- 2.91s  the ledger still adds up after thousands of reservations
- 2.28s  a cap holds against hundreds of simultaneous draws
+35.02s  a batch of purchases and attacks settles correctly
+28.30s  a batch of disputes is scored and not all contested
+11.29s  the chain holds over a long run and verifies offline
+ 9.42s  the ledger still adds up after thousands of reservations
+ 7.89s  a cap holds against hundreds of simultaneous draws
 ```
 
 ### Offline evidence verification
 
 ```
-packets read        : 53
-signatures verified : 53
+packets read        : 884
+signatures verified : 884
 chain valid         : True
 ```
 
@@ -519,12 +601,31 @@ than the warehouse.
 **Would fail if** the evidence chain forked under concurrent appends, a budget drifted, or a verdict
 appeared without a reason code. Two of those did fail, and both are fixed.
 
+### s12, The human-present flow
+
+**Proves** that a checkout claiming a person was at the keyboard is checked rather than believed,
+and that being believed would not have bought the agent anything anyway.
+
+**Valid because** every refusal in it is a refusal an absent buyer would get for the same cart. The
+suite drives a forged attestation, one signed by a surface the registry does not know, one an hour
+old, and one bound to a different cart, and then the two cases that matter most: a valid attestation
+over the human's own cap, and a valid attestation against an instruction the kernel cannot settle.
+Both are refused. It also drives the one path that ends in a sale, an escalation answered by a
+signed confirmation, and the impostor version of it where the agent signs its own approval.
+
+**Would fail if** presence were a boolean the caller asserts, if a stale or borrowed attestation
+were accepted, or if being present widened a limit. It is also the only suite that drives
+`APPROVED_AFTER_HUMAN_APPROVAL` over HTTP; `tests/test_human_present.py` covers the same path in
+process. Before either existed, nothing reached that code at all.
+
 ## How to replicate every number
 
 ```bash
 docker compose up -d
 cd backend
-python -m venv .venv && .venv/Scripts/activate && pip install -r requirements.txt
+python -m venv .venv
+.venv/Scripts/activate    # source .venv/bin/activate on macOS or Linux
+pip install -r requirements.txt
 cp .env.example .env      # then fill it in, see "Obtaining credentials"
 ```
 
@@ -539,16 +640,19 @@ pytest -m soak
 #    at the bounded size CI runs
 SOAK_SCALE=ci pytest -m soak
 
-# 3. both scorecards
+# 3. every case in the corpus matrix, rather than one per technique
+pytest -m corpus_matrix
+
+# 4. both scorecards: 633 attack cases, 176 benign, 204 disputes. About three minutes.
 python -m app.cli reports
 
-# 4. the offline evidence check, with nothing else running
+# 5. the offline evidence check, with nothing else running
 python -m app.cli --database "${DB_NAME}_reports" export-evidence --out reports/evidence.jsonl
 python -m app.cli export-jwks --out reports/merchant_jwks.json
 python tools/verify_evidence.py \
   --jsonl reports/evidence.jsonl \
   --jwks reports/merchant_jwks.json \
-  --min-packets 40
+  --min-packets 400
 ```
 
 The scenario suite and the interop driver need a running merchant. Start it for testing, which
@@ -560,7 +664,8 @@ APP_ENV=testing uvicorn main:app --port 8000
 
 ```bash
 python interop/run_interop.py --base http://127.0.0.1:8000
-python scenarios/run_suite.py --base http://127.0.0.1:8000 --profile standard
+python scenarios/run_suite.py --base http://127.0.0.1:8000 --profile full
+python interop/reference_agent/drive_reference_tools.py --base http://127.0.0.1:8000
 ```
 
 The suite **refuses to run** against a merchant that would send real WhatsApp messages. It reads
@@ -581,7 +686,7 @@ One command, against a running backend:
 cd backend && python scenarios/run_suite.py --profile demo
 ```
 
-It restocks the catalog, runs all eleven suites at demo scale, and leaves real data behind. From
+It restocks the catalog, runs all twelve suites at demo scale, and leaves real data behind. From
 the run recorded above:
 
 | What appears | Count |
@@ -642,24 +747,35 @@ The image is also part of the evidence record. `CatalogEntry.snapshot()` writes 
 the frozen catalog snapshot, and the evidence browser renders it, because reconstructing what the
 buyer was shown at quote time means the picture as well as the price.
 
-## Defects these tests found
+## What the tests caught, and how it was fixed
 
-Listed because "what broke at 2 AM" is a thing this project is judged on, and because each one was
-invisible to the layer above it.
+**Every defect below was found by this project's own testing and is fixed, and each one has a
+regression test that keeps it fixed.** Several of those tests fail against the old code; the budget
+one grants thirty draws where ten were allowed.
 
-| Defect | Found by | Why the layer above missed it |
+They are listed rather than quietly patched because a gate is only worth what its testing is worth,
+and the useful thing to know about a test suite is what it has actually caught. Every one of these
+was invisible to the layer above it, which is the argument for having five layers.
+
+| Defect, and the fix | Found by | Why the layer above missed it |
 |---|---|---|
 | **The budget cap could be breached under concurrency.** The row lock was correct; the value read under it came from SQLAlchemy's identity map, so a checkout decided against a balance from before every other session's spend. Five concurrent draws against a two-unit cap all settled. | `s03`, over HTTP | The concurrency fuzz reserved from a fresh session every time. A real checkout has already loaded the mandate before it reaches the kernel, and that is precisely what triggers the stale read. |
 | **The evidence chain forked under concurrent appends.** Two checkouts read the same head, computed the same sequence number, and one lost on the primary key with a 500, filing no packet. 25 occurrences in a 20-second run. | `s11`, mixed traffic | In-process tests append one at a time. |
 | **A mandate presented by two sessions at once caused a 500.** `_upsert_open_mandate` was a read-then-insert against a unique index. | `s11` | The same. |
+| **The corpus never checked the key-binding audience.** It called `complete()` without an audience, so the check the HTTP endpoint does perform was skipped for every in-process case. A proof of possession addressed to another merchant was accepted. **Fixed:** the corpus now presents to the same audience the endpoint does, and three key-binding attacks were added. | Adding a key-binding attack and watching it pass | The corpus and the endpoint disagreed about what a full verification was, and only the endpoint was right. |
+| **An authority's published key file grew without bound.** 1601 keys, 387 KB, re-read and re-parsed on every verification, and scanned in full for any credential whose kid matched nothing. **Fixed:** the published set is capped, as a real authority's would be. | Reading it while scaling the corpus | Nothing failed. It just got slower every run. |
+| **The policy-hash attack only worked once per run.** It revised the terms to a fixed body, so the second case to run it revised them to what they already said and the purchase completed. **Fixed:** each case revises the terms to something unique to it. | Executing the technique more than once | With one case per technique, the bug could not appear. |
+| **The scenario suite depended on the order its suites ran in.** Restock reset `stock_total` but not outstanding holds, so a late suite met a shelf that was full and sold out at the same time. **Fixed:** restocking releases holds too, and every suite starts from the seeded shelf. | Adding a twelfth suite | Every existing suite ran early enough not to notice. |
+| **Catalog search only matched a single substring.** An agent asking for "one pack of Nilgiri black tea" got nothing; "tea" worked. For a catalog whose purpose is to be read by machines that speak English, that is a defect. **Fixed:** the query is tokenised, so an item matches when every meaningful word in the request appears in its text. | The published AP2 shopping agent, searching in a full sentence | Every test and every driver already phrased queries the way the merchant stored them. |
 | **Publishing a key lost it.** Concurrent agents each read the same JWKS file and wrote back only their own, so all but the last vanished and their genuine credentials were refused as unsigned. | `s11` | One agent at a time never races. |
 | **A WhatsApp outage could stall the merchant.** The receipt was sent inside the checkout transaction, so an agent waited on Meta's latency while holding the rows the next checkout needed. A thread-per-receipt fix was worse: it emptied the connection pool. | `s11`, twice | Neither is visible without sustained load and a slow channel. |
 | **A rate-limited planner killed the whole buyer run.** Gemini's free tier is twenty requests a day; the twenty-first run ended as an error with no cart, no verdict and no evidence. | driving the console by hand | The tests use the deterministic planner, which never fails. |
 | **The dashboard took 28 seconds to render.** One extra query per mandate and per agent. Invisible at ten rows, fatal at seven hundred. | the `demo` profile, then a stopwatch | Nothing before it had ever created seven hundred agents. |
 | **A developer's `.env` disabled the test profile.** `APP_ENV=development` in a local `.env` beat the suite's own default, so the tests tried to reach Gemini locally while passing in CI. | running the suite on a machine with a real `.env` | CI sets the variable explicitly, so CI never saw it. |
 
-Each has a regression test. The budget one has a control that fails against the old code: thirty
-draws granted where ten were allowed.
+The pattern is the point. Every one of these was found by a layer that did something the layer
+below it could not: real concurrency, real volume, a real outside client, or an adversarial reading
+of code that had just been written. None of them were found by staring at the diff.
 
 ---
 
@@ -696,10 +812,10 @@ out of date; it appears nowhere in this repository.
 | Area | Status | Evidence |
 |---|---|---|
 | Human-not-present flow | Implemented | `interop/driver.py` drives it end to end; `tests/test_checkout_flow.py`; `scenarios/suites/s01` |
-| Human-present flow | Not implemented | Out of scope; the merchant's verification duty is not the interesting case there |
+| Human-present flow | Implemented | Presence attested by a trusted surface, bound to one Checkout and time-boxed; `scenarios/suites/s12`, `tests/test_human_present.py`, and its own attack family in the corpus |
 | Merchant role | Implemented | Quote, merchant-signed Checkout, verification, checkout receipt |
 | Merchant Payment Processor role | Implemented | Order creation, capture, refunds, reconciliation against Razorpay |
-| Credential Provider role | Mocked | `app/harness/factory.py`. Out of scope, as section 3 of the specification allows |
+| Credential Provider role | Mocked | `app/harness/factory.py`. AP2 puts credential issuance outside the merchant role |
 | Trusted Surface | Mocked | Same module. It signs the open mandates the way a trusted surface would |
 | Open Checkout Mandate | Implemented | Verified, and validated against the published schema |
 | Closed Checkout Mandate | Implemented | Verified, including `checkout_hash` binding to the merchant-signed Checkout |
@@ -711,30 +827,62 @@ out of date; it appears nowhere in this repository.
 | SD-JWT key binding | Implemented | KB-JWT with `sd_hash`, `aud` and `nonce`, verified against `cnf.jwk` |
 | SD-JWT delegation chains | Not implemented | Single-hop issuance only; multi-hop agent delegation is not supported |
 | x402 flow | Not implemented | Card flow only |
-| A2A transport | Not implemented | Dwarpal speaks HTTP and MCP, not the A2A envelope |
+| A2A transport | Not implemented | Dwarpal speaks HTTP and MCP. The published shopping agent reaches it over MCP, which is how that agent addresses a merchant; the A2A envelope is between the agent and its own client |
+| Reference shopping agent | Runs against it, no purchase completed | `scripts/run_reference_agent.sh` starts the published agent against this merchant and it calls Dwarpal's tools. It stops where it asks for a product this merchant does not sell; see the section below |
 | Schema validation | Implemented | Vendored schemas, enforced on issue and on accept |
-
-`SPEC_DELTA.md` is the companion to this table: every place the built system differs from
-`IMPLEMENTATION_PLAN.md`, with a judgement about which is better and why.
 
 ## What the interop claim rests on
 
-Two halves, and they are not equally strong.
+Three things, and they are not equally strong. They are listed strongest first, and the third is
+where the honest limit is.
 
-**Machine-verified here.** `backend/interop/run_interop.py` plays the Trusted Surface, the
+**One: a live AP2 client, in CI.** `backend/interop/run_interop.py` plays the Trusted Surface, the
 Shopping Agent and the mocked Credential Provider against a running Dwarpal over HTTP. It drives a
-complete human-not-present purchase, the degraded path for an unverified agent, an attack that is
-refused with a reason code, and revocation after capture. Every credential it puts on the wire is
-validated against the published AP2 JSON Schemas before it is sent, so the run cannot pass by
-feeding Dwarpal something the specification would reject. This runs in CI on every push, alongside
-the scenario suite.
+complete human-not-present purchase, a human-present one, the degraded path for an unverified agent,
+an attack refused with a reason code, and revocation after capture: 34 checks across 5 scenarios.
+Every credential it puts on the wire is validated against the published AP2 JSON Schemas before it
+is sent, so the run cannot pass by feeding Dwarpal something the specification would reject. This
+runs on every push.
 
-**Not verified here.** The upstream reference shopping agent (`shopping_agent_v2` in the AP2
-repository) is a Google ADK application that needs `uv` and a Google API key, and it speaks A2A
-rather than plain HTTP. Dwarpal exposes an MCP server at `app/mcp/server.py` that presents the
-catalog, the policy terms and the quote endpoint in the shape that agent expects, but the two have
-not been run against each other in this repository, and the matrix says so rather than implying
-otherwise.
+**Two: the reference agent's own merchant interface, driven end to end.**
+`backend/interop/reference_agent/merchant_mcp_server.py` presents Dwarpal as the five MCP tools
+`shopping_agent_v2` expects of a merchant: `search_inventory`, `check_product`, `assemble_cart`,
+`create_checkout`, `complete_checkout`. It is not a mock of Dwarpal; every tool is an HTTP call to a
+running Dwarpal, so the agent's cart holds real stock and its checkout runs the whole verification
+pipeline. `drive_reference_tools.py` speaks MCP to it and walks all five tools in the upstream
+order, ending in a settled checkout with an evidence packet, and then shows a replayed chain
+refused with `CRED_REPLAYED`. That needs no ADK, no `uv` and no API key, so it runs anywhere.
+
+**Three: the published agent itself, actually run.** One command fetches the AP2 samples at the
+pinned commit, puts Dwarpal in place of the sample merchant, starts the agent and the two upstream
+credential services, and holds a four-turn conversation with it over A2A:
+
+```bash
+bash scripts/run_reference_agent.sh          # .\scripts\run_reference_agent.ps1 on Windows
+```
+
+**This has been run, and here is exactly how far it got.** The agent starts, serves its agent card,
+accepts the conversation, signs its open mandates, and calls Dwarpal's merchant tools:
+`search_inventory` and `check_product` appear in Dwarpal's own log with the arguments the agent
+chose. It does not reach `assemble_cart`, and no purchase settles.
+
+The reason is worth stating plainly, because it is a finding about the sample rather than about
+this merchant. `shopping_agent_v2` does not search for what the user asked for and then buy it. It
+builds an item identifier by slugifying its own description of the product, and the sample merchant
+it was written against **generates an item to match whatever slug it is handed**, at a price derived
+from the caller's own budget. Against that merchant the agent can never fail to find something.
+Against a merchant with a real catalog, its habit of drifting to the worked example in its own
+prompt, a "SuperShoe LE Gold", surfaces immediately: it asks for `supershoe_le_gold_womens_9_0`, and
+Dwarpal, which sells tea and notebooks, says it does not stock that and lists what it does.
+
+Dwarpal meets it as far as it honestly can. The adapter resolves a descriptive identifier back to a
+real sku, so `nilgiri_black_tea_0` finds `DWP-TEA-001`, and returns the catalog when an agent asks
+for something that does not exist. What it will not do is invent an item, because a merchant that
+fabricates stock to satisfy an agent is the opposite of the thing being built here.
+
+So: the published agent runs against this merchant and calls its tools, and stops at the point
+where it asks for a product this merchant does not sell. A purchase completed by the upstream agent
+is not claimed anywhere, and the conformance matrix says the same thing in one line.
 
 ## Verified against the live services
 
@@ -934,9 +1082,9 @@ backend/            FastAPI application
   interop/          the AP2 interop driver
   tests/            the fast suite and the soak
   tools/            the standalone evidence verifier, which imports nothing from app/
+  interop/reference_agent/   Dwarpal in the shape the AP2 reference shopping agent expects
 frontend/           Next.js: the landing page, the login, and the two consoles
-scripts/            tunnel helper for the webhook callbacks
-SPEC_DELTA.md       where the code differs from the plan, and which is right
+scripts/            tunnel helper, and the reference-agent runner
 ```
 
 ## Prerequisites
@@ -962,7 +1110,7 @@ Backend:
 ```bash
 cd backend
 python -m venv .venv
-.venv/Scripts/activate
+.venv/Scripts/activate    # source .venv/bin/activate on macOS or Linux
 pip install -r requirements.txt
 cp .env.example .env
 ```
@@ -1061,7 +1209,9 @@ npm run dev
 The site runs at http://localhost:3000 and proxies API calls to the origin named by
 `BACKEND_ORIGIN`. Only the merchant and buyer-console surfaces are proxied; the agent endpoints are
 not, because agents transact against the backend directly and must not reach it through the
-dashboard's origin.
+dashboard's origin. The proxy also refuses requests that did not come from its own origin, so a
+page on another site cannot use a visitor's browser to spend the merchant token. It has no login of
+its own; see **The two consoles** above for what that means before you expose it.
 
 ## Driving a purchase from a terminal
 
@@ -1074,6 +1224,31 @@ python interop/run_interop.py
 
 It plays the Trusted Surface, the Shopping Agent and the mocked Credential Provider, and reports
 every check it made. Watch the result appear in the merchant verdict log and evidence browser.
+
+### Running the published AP2 shopping agent against it
+
+```bash
+bash scripts/run_reference_agent.sh            # .\scripts\run_reference_agent.ps1 on Windows
+```
+
+One command. It fetches the AP2 samples at the pinned commit into `.reference-agent/`, installs
+Dwarpal in place of the sample merchant, brings up the agent and the two upstream credential
+services, and holds a conversation with the agent over A2A. It needs `git`, a Google API key in
+`GOOGLE_API_KEY` or `GEMINI_API_KEY`, and `uv`, which it will install with `--install-uv`. Nothing
+in the Dwarpal tree is modified, and the sample merchant it replaces is kept beside it as
+`server.upstream.py`.
+
+What that run does and does not establish is set out under
+[What the interop claim rests on](#what-the-interop-claim-rests-on). To exercise the same merchant
+interface without ADK, `uv` or an API key:
+
+```bash
+cd backend
+python interop/reference_agent/drive_reference_tools.py
+```
+
+That speaks MCP to the same adapter, walks the five tools the reference agent uses, and ends in a
+settled checkout with an evidence packet behind it.
 
 ### Pointing Claude at the catalog over MCP
 
@@ -1161,5 +1336,44 @@ neither truncates the other's chain, so exporting the corpus chain means naming 
 python -m app.cli --database "${DB_NAME}_reports" export-evidence --out reports/evidence.jsonl
 ```
 
-This is what CI does, so the offline check there runs against a real chain of about fifty packets
-rather than an empty one.
+This is what CI does, so the offline check there runs against a real chain of several hundred
+packets rather than an empty one.
+
+
+---
+
+# Licence
+
+This project is MIT licensed. See [LICENSE](LICENSE).
+
+Two sets of files in the repository are not covered by that licence, because they are not this
+project's to license.
+
+**The AP2 JSON Schemas** under `backend/app/ap2/schemas/` are copied verbatim from the Agent
+Payments Protocol reference implementation at revision
+`e1ea56db72a6385bce3e5c1112b3a56ce60acb43` and redistributed under the Apache License, Version 2.0.
+A copy of that licence and the provenance of the files are in the same directory.
+
+**The catalog photographs** in `frontend/public/catalog/` are from Wikimedia Commons. Each was
+resized to 960 pixels wide and is otherwise unmodified. The full record, including the source page
+and the original URL of each, is in `backend/config/catalog_image_credits.json`, and the test suite
+fails if an image requiring attribution does not name its creator.
+
+| Item | Photographer | Licence |
+|---|---|---|
+| Nilgiri Black Tea 250g | Oraola | CC BY-SA 4.0 |
+| Single Origin Coffee Beans 500g | freestock.ca | CC BY-SA 3.0 |
+| Fresh Paneer 400g | MartinThoma | CC0 |
+| Alphonso Mangoes 1kg | SANHITA TALATHI | CC BY-SA 4.0 |
+| Sula Cabernet Shiraz 750ml | congerdesign | CC0 |
+| Chef Knife 8 inch | Olaf Simons | CC BY-SA 3.0 |
+| Wireless Headphones | david falkner from Birmingham, England | CC BY 2.0 |
+| Mechanical Keyboard 75 percent | Anirban Saha | CC BY-SA 4.0 |
+| Desk Lamp with Dimmer | Nick Stenning from UK | CC BY-SA 3.0 |
+| Desk Lamp Compact | Hannes Grobe | CC BY-SA 4.0 |
+| Hardcover Notebook A5 | JESHOOTS.COM jeshoots | CC0 |
+| Fountain Pen Medium Nib | Pavel.satrapa | CC BY-SA 4.0 |
+
+The brand marks drawn in `frontend/components/brand.tsx` are CC0 glyphs from Simple Icons, used
+nominatively to say which services this software talks to. They are their owners' trademarks and
+their appearance here is not a claim of endorsement.

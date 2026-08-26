@@ -223,13 +223,16 @@ def pay_the_order(client: Client, outcome: ScenarioOutcome, completion: dict[str
 
 
 def _wire_body(credentials: Any) -> dict[str, Any]:
-    return {
+    body = {
         "open_checkout_mandate": credentials.open_checkout,
         "closed_checkout_mandate": credentials.closed_checkout,
         "open_payment_mandate": credentials.open_payment,
         "closed_payment_mandate": credentials.closed_payment,
         "nonce": credentials.nonce,
     }
+    if credentials.presence:
+        body["presence_attestation"] = credentials.presence
+    return body
 
 
 def discover(client: Client, outcome: ScenarioOutcome) -> dict[str, Any]:
@@ -337,6 +340,103 @@ def scenario_purchase(client: Client, base: str) -> ScenarioOutcome:
         replay.get("reason_code") == "CRED_REPLAYED",
         replay.get("reason_code", ""),
     )
+    return outcome
+
+
+def scenario_human_present(client: Client, audience: str) -> ScenarioOutcome:
+    """AP2's other flow: a person is at a trusted surface, and the surface attests to it.
+
+    The claim is checked rather than taken, and it earns nothing. The last two steps are the point:
+    an attestation for a different cart is refused, and a valid one over the human's own cap is
+    refused for the cap, exactly as an absent buyer would be.
+    """
+    outcome = ScenarioOutcome("human-present purchase")
+    cart = [("DWP-TEA-001", "Nilgiri Black Tea 250g", 1)]
+
+    status, quoted = client.post(
+        "/checkout/quote",
+        {"items": [{"sku": "DWP-TEA-001", "quantity": 1}]},
+        headers={"X-Agent-Id": f"agent:interop-present-{RUN_ID}"},
+    )
+    outcome.add("quote returned a merchant-signed Checkout", status == 200, f"HTTP {status}")
+    if status != 200:
+        return outcome
+
+    principals = _mint(f"agent:interop-present-{RUN_ID}")
+    presentation = factory.present(
+        principals,
+        factory.spec_for_cart(cart),
+        checkout_jwt=quoted["checkout_jwt"],
+        checkout_hash=quoted["checkout_hash"],
+        amount_minor=quoted["total"]["amount"],
+        audience=audience,
+        nonce=f"interop-present-{RUN_ID}",
+        human_present=True,
+    )
+    outcome.add(
+        "the trusted surface attests that a person was there",
+        bool(presentation.credentials.presence),
+    )
+
+    status, settled = client.post("/checkout/complete", _wire_body(presentation.credentials))
+    outcome.add(
+        "the human-present purchase is decided",
+        settled.get("status") in ("completed", "awaiting_payment"),
+        f"HTTP {status} {settled.get('reason_code')}",
+    )
+    outcome.add("an evidence packet was filed", bool(settled.get("evidence_packet_id")))
+
+    stale_status, stale_quote = client.post(
+        "/checkout/quote",
+        {"items": [{"sku": "DWP-TEA-001", "quantity": 1}]},
+        headers={"X-Agent-Id": f"agent:interop-present-stale-{RUN_ID}"},
+    )
+    if stale_status == 200:
+        stale_principals = _mint(f"agent:interop-present-stale-{RUN_ID}")
+        wrong_cart = factory.present(
+            stale_principals,
+            factory.spec_for_cart(cart),
+            checkout_jwt=stale_quote["checkout_jwt"],
+            checkout_hash=stale_quote["checkout_hash"],
+            amount_minor=stale_quote["total"]["amount"],
+            audience=audience,
+            nonce=f"interop-present-wrong-{RUN_ID}",
+            tamper=factory.Tamper(presence_checkout_hash="a-different-checkout-entirely"),
+            human_present=True,
+        )
+        _status, refused = client.post("/checkout/complete", _wire_body(wrong_cart.credentials))
+        outcome.add(
+            "an attestation bound to another cart is refused",
+            refused.get("reason_code") == "PRESENCE_BINDING_MISMATCH",
+            str(refused.get("reason_code")),
+        )
+
+    cap_status, cap_quote = client.post(
+        "/checkout/quote",
+        {"items": [{"sku": "DWP-HDP-007", "quantity": 1}]},
+        headers={"X-Agent-Id": f"agent:interop-present-cap-{RUN_ID}"},
+    )
+    if cap_status == 200:
+        cap_principals = _mint(f"agent:interop-present-cap-{RUN_ID}")
+        over_cap = factory.present(
+            cap_principals,
+            factory.spec_for_cart(
+                [("DWP-HDP-007", "Wireless Headphones", 1)], amount_cap_minor=100000
+            ),
+            checkout_jwt=cap_quote["checkout_jwt"],
+            checkout_hash=cap_quote["checkout_hash"],
+            amount_minor=cap_quote["total"]["amount"],
+            audience=audience,
+            nonce=f"interop-present-cap-{RUN_ID}",
+            human_present=True,
+        )
+        _status, capped = client.post("/checkout/complete", _wire_body(over_cap.credentials))
+        outcome.add(
+            "presence does not lift the cap the human signed",
+            capped.get("reason_code") == "CONSTRAINT_AMOUNT_EXCEEDED",
+            str(capped.get("reason_code")),
+        )
+
     return outcome
 
 
@@ -516,6 +616,7 @@ def run(base: str) -> int:
 
     outcomes = [
         scenario_purchase(client, base),
+        scenario_human_present(client, audience),
         scenario_unverified_challenge(client),
         scenario_attack(client, audience),
         scenario_revocation_after_capture(client, audience),

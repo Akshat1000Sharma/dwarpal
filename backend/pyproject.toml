@@ -14,9 +14,10 @@ ignore = ["B008", "RUF012"]
 testpaths = ["tests"]
 # The soak suite is deselected by default so the everyday run stays fast. A command line -m is
 # parsed after addopts and wins, so "pytest -m soak" runs exactly those tests.
-addopts = "-q --strict-markers -m 'not soak'"
+addopts = "-q --strict-markers -m 'not soak and not corpus_matrix'"
 markers = [
     "concurrency: tests that require real committed transactions and row locking",
     "soak: long-running tests, sized by SOAK_SCALE (full locally, ci in CI)",
+    "corpus_matrix: every case the corpus matrix generates, rather than one per technique",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]

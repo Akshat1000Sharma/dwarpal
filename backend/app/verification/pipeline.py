@@ -1,8 +1,8 @@
 """Mandate verification.
 
 On an inbound checkout attempt Dwarpal must establish that the agent has authority, in a way a
-third party can later re-check. The order below is fixed by specification section 5 and the
-pipeline refuses at the first failure, recording which step refused.
+third party can later re-check. The order below is fixed, and the pipeline refuses at the first
+failure, recording which step refused.
 
     1. the credential is well formed and its signature is valid
     2. the signing key resolves to a known agent identity, and that identity is the subject the
@@ -13,6 +13,12 @@ pipeline refuses at the first failure, recording which step refused.
     6. the closed Checkout Mandate binds to the merchant's own signed Checkout record, covering
        the cart contents, the total and the policy hash
     7. the closed Checkout Mandate satisfies every constraint in the open Checkout Mandate
+    8. if the attempt claims a person was present, that claim is signed by a trusted surface,
+       bound to this Checkout, fresh, and has not been seen before
+
+Step 8 runs only when a presence attestation is supplied; without one this is the human-not-present
+flow and nothing about it changes. Presence is recorded, never rewarded: it widens no limit, and
+the kernel evaluates an attempt that carries one exactly as it evaluates one that does not.
 
 Step 2 is the confused-deputy case: an agent presenting a credential issued to a different agent
 is refused, and that has its own test. Step 7 is the duty AP2 assigns to the merchant and leaves
@@ -35,10 +41,17 @@ from app.ap2.constraints import (
     evaluate_checkout_constraints,
     evaluate_payment_constraints,
 )
-from app.ap2.jose import JoseError, jwk_thumbprint, public_key_from_jwk, sha256_b64url, verify_jws
+from app.ap2.jose import (
+    JoseError,
+    decode_jws_unverified,
+    jwk_thumbprint,
+    public_key_from_jwk,
+    sha256_b64url,
+    verify_jws,
+)
 from app.ap2.models import Checkout, ClosedCheckoutMandate, ClosedPaymentMandate, Merchant
 from app.ap2.schema_validation import SchemaConformanceError, assert_conforms
-from app.ap2.vocabulary import EXTENSION_CONSTRAINTS_CLAIM, Vct
+from app.ap2.vocabulary import EXTENSION_CONSTRAINTS_CLAIM, PRESENCE_JWT_TYP, Vct
 from app.db.base import utcnow
 from app.db.models import CheckoutSession, OpenMandate
 from app.kernel.reasons import ReasonCode
@@ -57,6 +70,7 @@ class PresentedCredentials:
     open_payment: str | None = None
     closed_payment: str | None = None
     nonce: str | None = None
+    presence: str | None = None
 
     def as_evidence(self) -> dict[str, Any]:
         return {
@@ -65,6 +79,7 @@ class PresentedCredentials:
             "open_payment_mandate": self.open_payment,
             "closed_payment_mandate": self.closed_payment,
             "nonce": self.nonce,
+            "presence_attestation": self.presence,
         }
 
 
@@ -109,6 +124,9 @@ class VerifiedAuthority:
     open_payment_digest: str | None = None
     constraint_results: list[ConstraintResult] = field(default_factory=list)
     steps_passed: list[str] = field(default_factory=list)
+    human_present: bool = False
+    presence_digest: str | None = None
+    presence_claims: dict[str, Any] | None = None
 
     def as_evidence(self) -> dict[str, Any]:
         return {
@@ -122,6 +140,15 @@ class VerifiedAuthority:
             "policy_hash": self.policy_hash,
             "steps_passed": self.steps_passed,
             "constraints": [c.as_evidence() for c in self.constraint_results],
+            "human_present": self.human_present,
+            "presence": {
+                "digest": self.presence_digest,
+                "method": (self.presence_claims or {}).get("method"),
+                "observed_at": (self.presence_claims or {}).get("iat"),
+                "subject": (self.presence_claims or {}).get("sub"),
+            }
+            if self.human_present
+            else None,
         }
 
 
@@ -143,6 +170,7 @@ STEP_NAMES = {
     5: "replay",
     6: "checkout_binding",
     7: "constraint_satisfaction",
+    8: "presence_attestation",
 }
 
 
@@ -156,22 +184,31 @@ def _skew() -> int:
     return settings.CREDENTIAL_CLOCK_SKEW_SECONDS
 
 
+_MAX_KEY_TRIALS = 8
+
+
 def _candidate_issuer_keys(
     registry: TrustRegistry, issuer_id: str, kid: str | None
 ) -> list[dict[str, Any]]:
-    """Every key the authority publishes, with any kid match tried first.
+    """The keys an authority publishes that could have signed this token.
 
-    An authority legitimately publishes more than one key, during rotation and afterwards.
-    Trying only the first would reject credentials signed by any of the others, so all of them
-    are candidates and the credential is refused only when none verifies.
+    An authority legitimately publishes more than one key, during rotation and afterwards, so
+    trying only the first would reject credentials signed by any of the others.
+
+    A header that names a kid is telling us which key was used, so when that kid matches something
+    the search stops there. A kid that matches nothing still has its signature checked, because
+    the refusal must say the signature was bad rather than that the authority is unknown, but only
+    against a bounded number of keys: otherwise one made-up kid from an unauthenticated caller
+    costs an elliptic-curve verification against every key the authority ever published.
     """
     keys = registry.keys_for(issuer_id)
     if not keys:
         return []
     if kid:
-        matching = [k for k in keys if k.get("kid") == kid]
-        others = [k for k in keys if k.get("kid") != kid]
-        return [*matching, *others]
+        matching = [k for k in keys if k.get("kid") in (kid, None, "")]
+        if matching:
+            return matching
+        return list(keys)[-_MAX_KEY_TRIALS:]
     return list(keys)
 
 
@@ -515,6 +552,27 @@ def verify(
 
     steps.append(STEP_NAMES[7])
 
+    # ---- step 8: the claim that a person was present ------------------------------------------
+    human_present = False
+    presence_digest: str | None = None
+    presence_claims: dict[str, Any] | None = None
+    if credentials.presence:
+        presence_outcome = _verify_presence(
+            session,
+            registry=registry,
+            token=credentials.presence,
+            checkout_hash=closed_model.checkout_hash,
+            moment=moment,
+            agent_id=agent_id,
+            mandate_issuer_id=issuer_id,
+            record_nonce=record_nonce,
+        )
+        if isinstance(presence_outcome, VerificationResult):
+            return presence_outcome
+        presence_claims, presence_digest = presence_outcome
+        human_present = True
+        steps.append(STEP_NAMES[8])
+
     return VerificationResult(
         authority=VerifiedAuthority(
             agent_id=agent_id,
@@ -536,8 +594,119 @@ def verify(
             open_payment_digest=open_payment_digest,
             constraint_results=results,
             steps_passed=steps,
+            human_present=human_present,
+            presence_digest=presence_digest,
+            presence_claims=presence_claims,
         )
     )
+
+
+def _verify_presence(
+    session: Session,
+    *,
+    registry: TrustRegistry,
+    token: str,
+    checkout_hash: str,
+    moment: datetime,
+    agent_id: str,
+    mandate_issuer_id: str,
+    record_nonce: bool,
+) -> VerificationResult | tuple[dict[str, Any], str]:
+    """Establish that a person really was at the surface, for this cart, just now.
+
+    Presence is the easiest thing in the protocol to assert and the hardest to check, so it is
+    treated as a credential rather than a header: signed by the trusted surface that issued the
+    human's standing authority, bound to this merchant's own Checkout, valid only for a short
+    window, and usable once.
+    """
+    try:
+        header, _unverified = decode_jws_unverified(token)
+    except JoseError as exc:
+        return _fail(8, ReasonCode.PRESENCE_ATTESTATION_INVALID, f"malformed attestation: {exc}")
+    if header.get("typ") != PRESENCE_JWT_TYP:
+        return _fail(
+            8,
+            ReasonCode.PRESENCE_ATTESTATION_INVALID,
+            f"presence attestation typ must be {PRESENCE_JWT_TYP}",
+        )
+
+    issuer_id = str(_unverified.get("iss") or "")
+    # The surface that issued the human's standing authority is the surface the human uses. Any
+    # other authority vouching for their presence is describing somebody else's screen, so being
+    # in the registry is not enough on its own.
+    if issuer_id != mandate_issuer_id:
+        return _fail(
+            8,
+            ReasonCode.PRESENCE_ISSUER_UNTRUSTED,
+            "presence was attested by an authority that did not issue this mandate",
+            attested_by=issuer_id or "nobody",
+            mandate_issued_by=mandate_issuer_id,
+        )
+    candidates = _candidate_issuer_keys(registry, issuer_id, header.get("kid"))
+    if not candidates:
+        return _fail(
+            8,
+            ReasonCode.PRESENCE_ISSUER_UNTRUSTED,
+            f"presence was attested by {issuer_id or 'nobody'}, which is not a trusted surface",
+            issuer_id=issuer_id,
+        )
+
+    claims: dict[str, Any] | None = None
+    for candidate in candidates:
+        try:
+            claims = verify_jws(token, public_key_from_jwk(candidate))
+            break
+        except JoseError:
+            continue
+    if claims is None:
+        return _fail(
+            8, ReasonCode.PRESENCE_ATTESTATION_INVALID, "presence attestation signature is invalid"
+        )
+
+    if claims.get("checkout_hash") != checkout_hash:
+        # An attestation that is not bound to this cart is an attestation about a different moment.
+        return _fail(
+            8,
+            ReasonCode.PRESENCE_BINDING_MISMATCH,
+            "the presence attestation covers a different Checkout",
+            attested=str(claims.get("checkout_hash"))[:64],
+            presented=checkout_hash,
+        )
+
+    observed_at = claims.get("iat")
+    if observed_at is None:
+        return _fail(8, ReasonCode.PRESENCE_ATTESTATION_INVALID, "attestation carries no iat")
+    age = int(moment.timestamp()) - int(observed_at)
+    if abs(age) > settings.PRESENCE_MAX_AGE_SECONDS + _skew():
+        return _fail(
+            8,
+            ReasonCode.PRESENCE_ATTESTATION_STALE,
+            "the person was observed too long ago for this to be a human-present checkout",
+            age_seconds=age,
+            max_age_seconds=settings.PRESENCE_MAX_AGE_SECONDS,
+        )
+
+    digest = sha256_b64url(token.encode("ascii"))
+    if record_nonce:
+        try:
+            nonce.remember(
+                session,
+                digest=digest,
+                kind=PRESENCE_JWT_TYP,
+                agent_id=agent_id,
+                correlation_id=checkout_hash[:64],
+            )
+        except nonce.ReplayDetected:
+            return _fail(
+                8,
+                ReasonCode.PRESENCE_REPLAYED,
+                "this presence attestation has already been presented",
+                digest=digest,
+            )
+    elif nonce.seen(session, digest):
+        return _fail(8, ReasonCode.PRESENCE_REPLAYED, "presence attestation already seen")
+
+    return claims, digest
 
 
 def _verify_payment(

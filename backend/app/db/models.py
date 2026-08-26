@@ -372,6 +372,11 @@ class Escalation(Base):
     answered_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     channel_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     delivery_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Who was asked. An answer from anybody else is not this person's answer.
+    sent_to: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # The surface whose mandate was being spent when the question was put. Pinned here because the
+    # Checkout's own mandate_id is rewritten by any later presentation.
+    issuer_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
 
 
@@ -386,6 +391,9 @@ class EscalationResponse(Base):
     accepted: Mapped[bool] = mapped_column(Boolean)
     ignored_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
     raw_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # The signed confirmation, when the answer arrived as one. Kept so an approval can be
+    # re-verified from the evidence rather than taken on the merchant's word that it checked.
+    proof: Mapped[str | None] = mapped_column(Text, nullable=True)
     received_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
 
 

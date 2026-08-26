@@ -687,3 +687,33 @@ def test_a_failed_compensating_refund_is_not_reported_as_compensated(seeded, gat
         select(PaymentException).where(PaymentException.kind == "compensating_refund_failed")
     )
     assert exception is not None
+
+
+def test_a_checkout_whose_hold_has_lapsed_is_not_sold(seeded, gateway):
+    """Stock is held at quote, and the hold is what makes the sale real.
+
+    A refusal releases the holds and the TTL expires them, and neither puts the Checkout into a
+    state that refuses a later presentation. Selling then would take payment for stock nobody
+    reserved, and the consume step would find no holds to decrement, so the shelf would not move
+    and the same unit could be sold again.
+    """
+    from app.db.models import Product
+    from app.kernel import inventory
+
+    db = seeded
+    quoted, presentation = _prepare(db, "dwc_lapsed_hold")
+    product = db.scalar(select(Product).where(Product.sku == CART[0][0]))
+    before = product.stock_total
+
+    inventory.release(db, quoted.row.id)
+    db.flush()
+
+    outcome = complete(
+        db, presentation.credentials, correlation_id="dwc_lapsed_hold", gateway=gateway
+    )
+
+    assert outcome.status == "refused"
+    assert outcome.reason_code is ReasonCode.INVENTORY_UNAVAILABLE
+    assert [c for c in gateway.calls if c[0] == "capture_payment"] == []
+    db.refresh(product)
+    assert product.stock_total == before

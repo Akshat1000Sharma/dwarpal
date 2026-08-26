@@ -60,11 +60,9 @@ def run(ctx: Context) -> Suite:
             f"revoke ok={revoked_ok}, then {outcome.get('reason_code')}",
         )
 
-    # Whether the post-capture window exists at all depends on the gateway. A gateway that
-    # authorises and captures inside the same request leaves no gap between the two for a
-    # revocation to land in; one that returns an unpaid order and waits for a capture webhook
-    # does. Both are real configurations, so the case asserts whichever this merchant can produce
-    # and says which it was.
+    # Whether a post-capture window exists depends on the gateway: capturing inside the request
+    # leaves no gap, waiting for a webhook does. Both are real, so the case asserts whichever this
+    # merchant produced and says which it was.
     _status, health = client.get("/health")
     inline_capture = health.get("gateway") == "stub"
 

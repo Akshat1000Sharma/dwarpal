@@ -64,11 +64,13 @@ def recipient_for(
     connection: AgentConnection | None = None
     if connection_id:
         connection = session.get(AgentConnection, connection_id)
+        # Revoking a connection withdraws it, including as a delivery address. Naming it by id
+        # rather than resolving it by agent must not be a way back in.
+        if connection is not None and connection.revoked_at is not None:
+            connection = None
     if connection is None:
-        # Two rows here means two people claim this identifier, and picking the newest would send
-        # one of them the other's purchase. Derived identifiers carry a unique suffix so this is
-        # not reachable by accident; an explicitly supplied duplicate resolves to nobody rather
-        # than to a guess.
+        # Two rows means two people claim this identifier, and picking the newest would send one of
+        # them the other's purchase. A duplicate resolves to nobody rather than to a guess.
         candidates = list(
             session.scalars(
                 select(AgentConnection)
@@ -312,11 +314,9 @@ def notify_outcome(
     )
 
 
-# One worker, one queue, one database connection. Sending means an HTTP call to Meta, and doing
-# that on the request thread makes an agent wait on Meta's latency for a decision already made,
-# while holding the rows the next checkout needs. A thread per receipt is worse: under load each
-# one takes a connection from the pool and blocks on the same outage until the pool is empty. One
-# worker cannot exhaust anything, and a receipt is not latency-critical.
+# One worker, one queue, one connection. Sending on the request thread would make an agent wait on
+# Meta for a decision already made, while holding rows the next checkout needs; a thread per
+# receipt would drain the pool during an outage. A receipt is not latency-critical.
 _QUEUE_LIMIT = 256
 _queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=_QUEUE_LIMIT)
 _worker: threading.Thread | None = None

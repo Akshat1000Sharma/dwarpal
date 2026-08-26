@@ -1,0 +1,56 @@
+MIT License
+
+Copyright (c) 2026 Akshat Sharma
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+THIRD-PARTY MATERIAL
+
+Two sets of files in this repository are not covered by the licence above,
+because they are not this project's to license. Both are redistributed under
+the terms their own authors set.
+
+1. AP2 JSON Schemas
+   backend/app/ap2/schemas/ap2/**, backend/app/ap2/schemas/ucp/**
+
+   Copied verbatim from the Agent Payments Protocol reference implementation
+   at https://github.com/google-agentic-commerce/AP2, revision
+   e1ea56db72a6385bce3e5c1112b3a56ce60acb43, and redistributed under the
+   Apache License, Version 2.0. A verbatim copy of that licence, and the
+   provenance of the files, are in backend/app/ap2/schemas/LICENSE and
+   backend/app/ap2/schemas/NOTICE.
+
+2. Catalog photographs
+   frontend/public/catalog/*.jpg
+
+   Twelve photographs from Wikimedia Commons, each under its own Creative
+   Commons licence: CC0, CC BY 2.0, CC BY-SA 3.0 or CC BY-SA 4.0. Each file
+   was resized to 960 pixels wide and is not otherwise modified. The creator,
+   licence, source page and original URL of every one is recorded per item in
+   backend/config/catalog_image_credits.json and listed in the README.
+
+   The share-alike terms apply to those images and to adaptations of them.
+   They do not extend to this project's own source, which is a separate work
+   distributed alongside them rather than an adaptation of them.
+
+Third-party packages installed from PyPI and npm are not redistributed here;
+they are declared in backend/requirements.txt, backend/pyproject.toml and
+frontend/package.json, and each carries its own licence.

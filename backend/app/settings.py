@@ -86,6 +86,9 @@ class Settings(BaseSettings):
     POLICY_TERMS_PATH: str = "./config/policy_terms.md"
 
     CREDENTIAL_CLOCK_SKEW_SECONDS: int = 60
+    # How recently the trusted surface must have observed the person, for a human-present
+    # checkout. Presence is a claim about this moment, so the window is deliberately short.
+    PRESENCE_MAX_AGE_SECONDS: int = 120
     UNVERIFIED_CEILING_MINOR: int = 50000
     BUDGET_RESERVATION_TTL_SECONDS: int = 300
     INVENTORY_HOLD_TTL_SECONDS: int = 600
@@ -96,7 +99,7 @@ class Settings(BaseSettings):
     @field_validator("RAZORPAY_KEY_ID")
     @classmethod
     def _must_be_test_mode(cls, value: str) -> str:
-        # Spec section 9 requires test mode throughout. Refusing a live key at startup makes that
+        # Razorpay is in test mode throughout. Refusing a live key at startup makes that
         # structural rather than a convention someone can forget.
         if not value.startswith("rzp_test_"):
             raise ValueError(

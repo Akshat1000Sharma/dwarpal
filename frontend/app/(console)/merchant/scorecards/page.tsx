@@ -57,7 +57,7 @@ export default async function ScorecardsPage() {
                 label="Attacks blocked"
                 value={`${attack.adversarial.blocked} / ${attack.adversarial.total}`}
                 tone="allow"
-                hint={percent(attack.adversarial.block_rate)}
+                hint={`${percent(attack.adversarial.block_rate)} across ${attack.adversarial.techniques} techniques`}
               />
               <Stat
                 label="Missed"
@@ -101,27 +101,41 @@ export default async function ScorecardsPage() {
             )}
           </Card>
 
+          <Card title="Settled without asking">
+            {(attack.settled_without_asking_detail ?? []).length === 0 ? (
+              <Empty>
+                None. Every scenario that declared it needed a human reached one. This is the
+                mirror of a false positive and the more serious direction to fail in, so it is
+                counted here rather than folded into the allowed total.
+              </Empty>
+            ) : (
+              <Table head={["Scenario", "Completed as"]}>
+                {attack.settled_without_asking_detail.map((entry, index) => (
+                  <Row key={`${String(entry.id)}-${index}`}>
+                    <Cell mono>{String(entry.id)}</Cell>
+                    <Cell>
+                      <span className="text-deny">{String(entry.observed_reason_code)}</span>
+                    </Cell>
+                  </Row>
+                ))}
+              </Table>
+            )}
+          </Card>
+
           <Card
-            title="Every scenario"
-            description={`Families covered: ${attack.families.join(", ")}`}
+            title="Every technique, and how many cases it ran as"
+            description={`A technique is one attack idea; a case is that idea executed against one item, issuing tier and amount. Families covered: ${attack.families.join(", ")}. The per-case table for all ${attack.results_count} cases is in the generated artifact under backend/reports/.`}
           >
-            <Table head={["Scenario", "Kind", "Blocked", "Reason code", "Result"]}>
-              {attack.results.map((result) => (
-                <Row key={result.id}>
+            <Table head={["Technique", "Family", "Cases", "Blocked", "Result"]}>
+              {attack.by_technique.map((entry) => (
+                <Row key={entry.technique}>
+                  <Cell mono>{entry.technique}</Cell>
+                  <Cell>{entry.family}</Cell>
+                  <Cell>{entry.cases}</Cell>
+                  <Cell>{entry.blocked}</Cell>
                   <Cell>
-                    <div className="font-mono text-xs">{result.id}</div>
-                    <div className="mt-1 max-w-lg text-xs text-muted">{result.description}</div>
-                  </Cell>
-                  <Cell>
-                    <Pill tone={result.kind === "adversarial" ? "deny" : "allow"}>
-                      {result.kind}
-                    </Pill>
-                  </Cell>
-                  <Cell>{result.observed_blocked ? "yes" : "no"}</Cell>
-                  <Cell mono>{result.observed_reason_code}</Cell>
-                  <Cell>
-                    <Pill tone={result.passed ? "allow" : "deny"}>
-                      {result.passed ? "as declared" : "MISS"}
+                    <Pill tone={entry.missed ? "deny" : "allow"}>
+                      {entry.missed ? `${entry.missed} MISSED` : "as declared"}
                     </Pill>
                   </Cell>
                 </Row>
@@ -187,22 +201,15 @@ export default async function ScorecardsPage() {
             )}
           </Card>
 
-          <Card title="Every dispute in the batch">
-            <Table head={["Case", "Transaction outcome", "With evidence", "Baseline", "Recommendation"]}>
-              {defence.disputes.map((entry) => (
-                <Row key={entry.case_id}>
-                  <Cell mono>{entry.case_id}</Cell>
-                  <Cell>{entry.transaction_outcome}</Cell>
-                  <Cell>{entry.strength_score}</Cell>
-                  <Cell>{entry.baseline_score}</Cell>
-                  <Cell>
-                    <Pill tone={entry.recommendation === "contest" ? "allow" : "escalate"}>
-                      {entry.recommendation}
-                    </Pill>
-                  </Cell>
-                </Row>
-              ))}
-            </Table>
+          <Card
+            title="Where the per-dispute rows are"
+            description={`${defence.disputes_count} disputes were scored. Every one of them, with its score and recommendation, is written to backend/reports/ by "python -m app.cli reports", and CI uploads that directory as an artifact on every run.`}
+          >
+            <Empty>
+              Not shown here on purpose: sending every row to this page would put most of a
+              megabyte in front of four figures. The reports directory is generated rather than
+              committed, so run the command above to produce it locally.
+            </Empty>
           </Card>
         </>
       )}

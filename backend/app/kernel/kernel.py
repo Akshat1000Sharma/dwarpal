@@ -19,6 +19,9 @@ evaluate, and only when this module has not already refused.
     8.  structuring across the rolling window
     9.  budget reservation against the open mandate cap, under a row lock
     10. anything the kernel could not decide becomes an escalation, never an approval
+
+A verified presence attestation is recorded on the verdict and changes none of the above. Presence
+decides who answers an escalation, not whether one is needed.
 """
 
 from __future__ import annotations
@@ -68,6 +71,9 @@ class KernelInput:
     policy_hash_acknowledged: str | None = None
     buyer_region: str | None = None
     verified: bool = False
+    # A verified presence attestation, recorded on the verdict. It never widens a limit: every rule
+    # below is evaluated identically whether or not the person was at the keyboard.
+    human_present: bool = False
     correlation_id: str = ""
     now: datetime = field(default_factory=utcnow)
     reserve_budget: bool = True
@@ -128,6 +134,7 @@ def evaluate(session: Session, request: KernelInput) -> KernelResult:
         "currency": request.currency,
         "checkout_id": request.checkout_id,
         "mandate_id": request.mandate_id,
+        "human_present": request.human_present,
     }
     tier = request.tier
     tier_name = tier.name if tier else UNVERIFIED_TIER

@@ -1,104 +1,129 @@
 family: authority-limits
 description: >
   Attacks that stay inside a valid credential chain but step outside the authority the human
-  actually granted: numeric caps, unauthorised items, restricted categories, cap evasion by
-  splitting, and revocation.
+  actually granted: numeric caps, budgets, unauthorised items, restricted categories, region locks,
+  cap evasion by splitting, recurrence, execution windows and revocation.
+
+  These are decided by the policy kernel, which evaluates the tier ceiling before it evaluates the
+  human's constraints. Carts here are therefore priced so that every tier in the matrix can afford
+  them; otherwise the refusal would be the ceiling rather than the technique under test.
+
+affordable_carts: &affordable_carts
+  - [{sku: DWP-TEA-001, title: Nilgiri Black Tea 250g, quantity: 1}]
+  - [{sku: DWP-NTB-011, title: Hardcover Notebook A5, quantity: 2}]
+  - [{sku: DWP-MLK-003, title: Fresh Paneer 400g, quantity: 3}]
+  - - {sku: DWP-TEA-001, title: Nilgiri Black Tea 250g, quantity: 1}
+    - {sku: DWP-NTB-011, title: Hardcover Notebook A5, quantity: 1}
+
+issuers: &issuers
+  - did:web:trusted-surface.dwarpal.test
+  - did:web:sandbox-wallet.dwarpal.test
+  - did:web:bank.dwarpal.test
+
+allowed_pisp: &allowed_pisp
+  legal_name: Authorised Payments Services Private Limited
+  brand_name: AuthorisedPay
+  domain_name: authorisedpay.example
+  id: pisp_authorised
 
 scenarios:
   - id: numeric-cap-breach
     description: >
       A single transaction above the amount_range cap the human set in the open Payment Mandate.
-    cart:
-      - sku: DWP-HDP-007
-        title: Wireless Headphones
-        quantity: 1
     mandate:
-      amount_cap_minor: 100000
+      amount_cap_minor: 10000
     expect_blocked: true
     expect_reason_codes:
       - CONSTRAINT_AMOUNT_EXCEEDED
+    matrix:
+      cart: *affordable_carts
+      mandate.issuer_id: *issuers
+
+  - id: amount-below-the-declared-minimum
+    description: >
+      The human set a floor as well as a ceiling. A cart under the floor is outside the authority
+      just as surely as one over the ceiling, and a merchant that only checked the ceiling would
+      settle it.
+    mandate:
+      amount_min_minor: 900000
+    expect_blocked: true
+    expect_reason_codes:
+      - CONSTRAINT_AMOUNT_BELOW_MINIMUM
+    matrix:
+      cart: *affordable_carts
+      mandate.issuer_id: *issuers
 
   - id: budget-exhausted
     description: The cumulative budget constraint is already spent.
-    cart:
-      - sku: DWP-HDP-007
-        title: Wireless Headphones
-        quantity: 1
     mandate:
-      budget_minor: 100000
+      budget_minor: 5000
     expect_blocked: true
     expect_reason_codes:
       - CONSTRAINT_BUDGET_EXCEEDED
+    matrix:
+      cart: *affordable_carts
+      mandate.issuer_id: *issuers
+
+  - id: pisp-not-in-the-allowlist
+    description: >
+      The human named the payment initiation service providers they accept, and the agent routes
+      the payment through a different one.
+    mandate:
+      allowed_pisps:
+        - *allowed_pisp
+    tamper:
+      pisp:
+        legal_name: Unlisted Initiation Services Limited
+        brand_name: Unlisted
+        domain_name: unlisted.example
+        id: pisp_unlisted
+    expect_blocked: true
+    expect_reason_codes:
+      - CONSTRAINT_PISP_NOT_ALLOWED
+    matrix:
+      cart: *affordable_carts
+      mandate.issuer_id: *issuers
 
   - id: item-the-human-never-authorised
     description: >
       The cart contains an item that satisfies no line-item requirement in the open mandate. The
       published constraint only says which items must be present, but a merchant discharging its
       duty must not let an unauthorised item ride along inside an authorised cart.
-    cart:
-      - sku: DWP-KBD-008
-        title: Mechanical Keyboard 75 percent
-        quantity: 1
     mandate:
       authorises_cart: false
     expect_blocked: true
     expect_reason_codes:
       - CONSTRAINT_LINE_ITEM_UNSATISFIED
+    matrix:
+      cart: *affordable_carts
+      mandate.issuer_id: *issuers
 
-  - id: restricted-category-purchase
+  - id: execution-window-not-yet-open
+    description: The human restricted execution to a future window.
+    mandate:
+      execution_not_before: "2099-01-01T00:00:00+00:00"
+    expect_blocked: true
+    expect_reason_codes:
+      - CONSTRAINT_EXECUTION_WINDOW
+    matrix:
+      cart: *affordable_carts
+      mandate.issuer_id: *issuers
+
+  - id: execution-window-already-closed
     description: >
-      An age-restricted item bought under a credential whose issuer tier does not permit it.
-    cart:
-      - sku: DWP-WIN-005
-        title: Sula Cabernet Shiraz 750ml
-        quantity: 1
+      The other end of the same constraint. Authority that has expired by the clock is not
+      authority, and a merchant that only checked the opening bound would honour it forever.
     mandate:
-      issuer_id: did:web:sandbox-wallet.dwarpal.test
+      execution_not_after: "2020-01-01T00:00:00+00:00"
     expect_blocked: true
     expect_reason_codes:
-      - UNVERIFIED_CATEGORY_FORBIDDEN
-      - ITEM_AGE_RESTRICTED
-      - CATEGORY_FORBIDDEN
-
-  - id: restricted-blade-purchase
-    description: A restricted-category item bought under an insufficient tier.
-    cart:
-      - sku: DWP-KNF-006
-        title: Chef Knife 8 inch
-        quantity: 1
-    mandate:
-      issuer_id: did:web:sandbox-wallet.dwarpal.test
-    expect_blocked: true
-    expect_reason_codes:
-      - ITEM_AGE_RESTRICTED
-      - CATEGORY_FORBIDDEN
-      - UNVERIFIED_CATEGORY_FORBIDDEN
-      - CRED_ISSUER_TIER_INSUFFICIENT
-
-  - id: cap-evasion-by-splitting
-    description: >
-      Structuring. Several purchases that each sit under the per-transaction cap but together
-      breach it inside the rolling window.
-    cart:
-      - sku: DWP-COF-002
-        title: Single Origin Coffee Beans 500g
-        quantity: 4
-    mandate:
-      issuer_id: did:web:sandbox-wallet.dwarpal.test
-    setup:
-      repeat_attempts: 4
-    expect_blocked: true
-    expect_reason_codes:
-      - STRUCTURING_DETECTED
-      - VELOCITY_SPEND_EXCEEDED
-      - CRED_ISSUER_TIER_INSUFFICIENT
+      - CONSTRAINT_EXECUTION_WINDOW
+    matrix:
+      cart: *affordable_carts
+      mandate.issuer_id: *issuers
 
   - id: recurrence-exhausted
     description: The open Payment Mandate permits one use and the agent attempts a second.
-    cart:
-      - sku: DWP-TEA-001
-        title: Nilgiri Black Tea 250g
-        quantity: 1
     mandate:
       max_occurrences: 1
     setup:
@@ -107,108 +132,191 @@ scenarios:
     expect_reason_codes:
       - CONSTRAINT_RECURRENCE_EXHAUSTED
       - CRED_REPLAYED
-
-  - id: execution-window-not-yet-open
-    description: The human restricted execution to a future window.
-    cart:
-      - sku: DWP-TEA-001
-        title: Nilgiri Black Tea 250g
-        quantity: 1
-    mandate:
-      execution_not_before: "2099-01-01T00:00:00+00:00"
-    expect_blocked: true
-    expect_reason_codes:
-      - CONSTRAINT_EXECUTION_WINDOW
+    matrix:
+      cart: *affordable_carts
+      mandate.issuer_id: *issuers
 
   - id: revocation-before-capture
     description: >
       The human revokes the mandate before the agent completes. Revocation is read immediately
       before money moves, so nothing is charged.
-    cart:
-      - sku: DWP-TEA-001
-        title: Nilgiri Black Tea 250g
-        quantity: 1
     setup:
       revoke_before_capture: true
     expect_blocked: true
     expect_reason_codes:
       - MANDATE_REVOKED
-
-  - id: region-lock-evaded-by-saying-nothing
-    description: >
-      The buyer region is supplied by the shopper about itself and is optional. A shopper that
-      simply omits it must not thereby escape a region lock: an undeclared region is an unknown
-      state, and unknown states fail closed.
-    cart:
-      - sku: DWP-WIN-005
-        title: Sula Cabernet Shiraz 750ml
-        quantity: 1
-    mandate:
-      issuer_id: did:web:bank.dwarpal.test
-    expect_blocked: true
-    expect_reason_codes:
-      - ITEM_REGION_LOCKED
-
-  - id: region-lock-honoured-when-declared
-    description: >
-      The same purchase from one of the four locked states, declared honestly, is refused for the
-      same reason.
-    cart:
-      - sku: DWP-WIN-005
-        title: Sula Cabernet Shiraz 750ml
-        quantity: 1
-    mandate:
-      issuer_id: did:web:bank.dwarpal.test
-    setup:
-      buyer_region: GJ
-    expect_blocked: true
-    expect_reason_codes:
-      - ITEM_REGION_LOCKED
+    matrix:
+      cart: *affordable_carts
+      mandate.issuer_id: *issuers
 
   - id: revocation-during-capture
     description: >
       The human revokes after the order is authorised but before capture is confirmed. This is the
       window a live Razorpay flow actually has, because the capture webhook arrives in a later
       request. The capture must be compensated by a refund rather than settled.
-    cart:
-      - sku: DWP-TEA-001
-        title: Nilgiri Black Tea 250g
-        quantity: 1
     setup:
       revoke_between_authorisation_and_capture: true
     expect_blocked: true
     expect_reason_codes:
       - MANDATE_REVOKED
+    matrix:
+      cart: *affordable_carts
+      mandate.issuer_id: *issuers
 
   - id: revocation-after-capture
     description: >
       The human revokes once the purchase has already settled. The completed transaction stands,
       but the mandate is dead: the next use of it must be refused rather than honoured.
-    cart:
-      - sku: DWP-TEA-001
-        title: Nilgiri Black Tea 250g
-        quantity: 1
     setup:
       revoke_after_capture: true
       repeat_attempts: 2
     expect_blocked: true
     expect_reason_codes:
       - MANDATE_REVOKED
+    matrix:
+      cart: *affordable_carts
+      mandate.issuer_id: *issuers
+
+  - id: restricted-category-purchase
+    description: >
+      An age-restricted item bought under a credential whose issuer tier does not permit it.
+    cart:
+      - sku: DWP-WIN-005
+        title: Sula Cabernet Shiraz 750ml
+        quantity: 1
+    expect_blocked: true
+    expect_reason_codes:
+      - UNVERIFIED_CATEGORY_FORBIDDEN
+      - ITEM_AGE_RESTRICTED
+      - CATEGORY_FORBIDDEN
+    matrix:
+      mandate.issuer_id:
+        - did:web:trusted-surface.dwarpal.test
+        - did:web:sandbox-wallet.dwarpal.test
+      cart:
+        - [{sku: DWP-WIN-005, title: Sula Cabernet Shiraz 750ml, quantity: 1}]
+        - [{sku: DWP-WIN-005, title: Sula Cabernet Shiraz 750ml, quantity: 2}]
+
+  - id: restricted-blade-purchase
+    description: A restricted-category item bought under an insufficient tier.
+    expect_blocked: true
+    expect_reason_codes:
+      - ITEM_AGE_RESTRICTED
+      - CATEGORY_FORBIDDEN
+      - UNVERIFIED_CATEGORY_FORBIDDEN
+      - CRED_ISSUER_TIER_INSUFFICIENT
+    matrix:
+      mandate.issuer_id:
+        - did:web:trusted-surface.dwarpal.test
+        - did:web:sandbox-wallet.dwarpal.test
+      cart:
+        - [{sku: DWP-KNF-006, title: Chef Knife 8 inch, quantity: 1}]
+        - [{sku: DWP-KNF-006, title: Chef Knife 8 inch, quantity: 2}]
+
+  - id: region-lock-evaded-by-saying-nothing
+    description: >
+      The buyer region is supplied by the shopper about itself and is optional. A shopper that
+      simply omits it must not thereby escape a region lock: an undeclared region is an unknown
+      state, and unknown states fail closed.
+    mandate:
+      issuer_id: did:web:bank.dwarpal.test
+    expect_blocked: true
+    expect_reason_codes:
+      - ITEM_REGION_LOCKED
+    matrix:
+      cart:
+        - [{sku: DWP-WIN-005, title: Sula Cabernet Shiraz 750ml, quantity: 1}]
+        - [{sku: DWP-WIN-005, title: Sula Cabernet Shiraz 750ml, quantity: 2}]
+
+  - id: region-lock-honoured-when-declared
+    description: >
+      The same purchase from a locked state, declared honestly, is refused for the same reason.
+      Every locked state is exercised, because a list is only enforced if all of it is.
+    cart:
+      - sku: DWP-WIN-005
+        title: Sula Cabernet Shiraz 750ml
+        quantity: 1
+    mandate:
+      issuer_id: did:web:bank.dwarpal.test
+    expect_blocked: true
+    expect_reason_codes:
+      - ITEM_REGION_LOCKED
+    matrix:
+      setup.buyer_region: [GJ, BR, MN, NL]
 
   - id: quantity-above-the-item-maximum
-    description: The cart asks for more units than the item's published maximum order quantity.
-    cart:
-      - sku: DWP-MNG-004
-        title: Alphonso Mangoes 1kg
-        quantity: 9
+    description: >
+      The cart asks for more units than the item's published maximum order quantity. Each item
+      publishes its own bound, so each is tried.
     expect_blocked: true
     expect_reason_codes:
       - QUANTITY_OUT_OF_RANGE
+    matrix:
+      cart:
+        - [{sku: DWP-MNG-004, title: Alphonso Mangoes 1kg, quantity: 9}]
+        - [{sku: DWP-MLK-003, title: Fresh Paneer 400g, quantity: 11}]
+        - [{sku: DWP-PEN-012, title: Fountain Pen Medium Nib, quantity: 4}]
+        - [{sku: DWP-KBD-008, title: Mechanical Keyboard 75 percent, quantity: 7}]
+
+  - id: cap-evasion-by-splitting
+    description: >
+      Structuring. Several purchases that each sit under the per-transaction cap but together
+      breach it inside the rolling window.
+
+      Each attempt here has to be affordable on its own, or the refusal is the tier ceiling and
+      the detector is never reached. The provisional ceiling is 250000 paise, so every cart below
+      is priced under that and the third attempt is what crosses it.
+    mandate:
+      issuer_id: did:web:sandbox-wallet.dwarpal.test
+    setup:
+      repeat_attempts: 3
+    expect_blocked: true
+    expect_reason_codes:
+      - STRUCTURING_DETECTED
+    matrix:
+      cart:
+        - [{sku: DWP-COF-002, title: Single Origin Coffee Beans 500g, quantity: 1}]
+        - [{sku: DWP-TEA-001, title: Nilgiri Black Tea 250g, quantity: 2}]
+        - [{sku: DWP-MLK-003, title: Fresh Paneer 400g, quantity: 4}]
+        - [{sku: DWP-MNG-004, title: Alphonso Mangoes 1kg, quantity: 1}]
+        - [{sku: DWP-NTB-011, title: Hardcover Notebook A5, quantity: 2}]
+
+  - id: cap-evasion-by-splitting-at-a-higher-tier
+    description: >
+      The same structuring, run against an accredited issuer, so the detector is shown to key off
+      whichever ceiling applies rather than one hardcoded band. Two attempts of 1498000 paise each
+      sit under the 2000000 ceiling and together cross it.
+    cart:
+      - sku: DWP-KBD-008
+        title: Mechanical Keyboard 75 percent
+        quantity: 2
+    mandate:
+      issuer_id: did:web:trusted-surface.dwarpal.test
+    setup:
+      repeat_attempts: 2
+    expect_blocked: true
+    expect_reason_codes:
+      - STRUCTURING_DETECTED
 
   - id: inventory-hold-exhaustion
     description: >
-      A single agent tries to lock up the entire shelf with holds it never converts. The per-agent
-      hold quota stops it, and stock stays purchasable by everyone else.
+      A single agent tries to lock up the shelf with holds it never converts. Stock is plentiful
+      here on purpose, so what stops it is the per-agent hold quota and not the shelf running out.
+    cart:
+      - sku: DWP-TEA-001
+        title: Nilgiri Black Tea 250g
+        quantity: 1
+    setup:
+      quote_only: true
+      repeat_attempts: 7
+    expect_blocked: true
+    expect_reason_codes:
+      - HOLD_QUOTA_EXCEEDED
+
+  - id: stock-oversold-by-a-second-buyer
+    description: >
+      Two attempts against the last units on the shelf. The first holds them, the second is
+      refused rather than sold stock that is already spoken for.
     cart:
       - sku: DWP-LMP-009
         title: Desk Lamp with Dimmer
@@ -220,5 +328,3 @@ scenarios:
     expect_blocked: true
     expect_reason_codes:
       - INVENTORY_UNAVAILABLE
-      - HOLD_QUOTA_EXCEEDED
-      - CRED_REPLAYED

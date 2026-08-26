@@ -207,9 +207,8 @@ def _evaluate_line_items(constraint: dict[str, Any], checkout: Checkout) -> Cons
         )
 
     # An item the human never authorised must not ride along inside an authorised cart. The
-    # published constraint only states which items must be present; refusing unlisted extras is a
-    # deliberate tightening, because the merchant's duty is to show the agent stayed inside the
-    # human's authority.
+    # published constraint only says which items must be present; refusing unlisted extras is a
+    # deliberate tightening of it.
     unauthorised = [
         {
             "line_id": line.id,

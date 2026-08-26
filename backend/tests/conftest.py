@@ -21,11 +21,9 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 
-# Settings the suite decides, whatever a developer's .env or the shell says. These are not
-# preferences: APP_ENV=testing is what selects the recording WhatsApp transport, the deterministic
-# buyer planner and the stub payment gateway, so a local .env carrying APP_ENV=development would
-# quietly point the suite at Meta, Gemini and Razorpay. The signing key directory is forced for the
-# same reason, so a test run cannot mint keys into the directory a real deployment is using.
+# Forced whatever a developer's .env says. APP_ENV=testing selects the recording WhatsApp
+# transport, the deterministic planner and the stub gateway, so a local .env would otherwise point
+# the suite at Meta, Gemini and Razorpay, and mint keys into a real deployment's directory.
 FORCED = {
     "APP_ENV": "testing",
     "MERCHANT_SIGNING_KEY_DIR": "./secrets/merchant_keys_test",

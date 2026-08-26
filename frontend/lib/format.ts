@@ -22,7 +22,7 @@ export function money(amount: number, currency = "INR"): string {
       .format(amount / 100)
       // Intl separates the code from the number with U+00A0. The backend writes a plain space,
       // and the two strings sit on the same screens, so this one is normalised to match.
-      .replace(/ /g, " ")
+      .replace(/\u00a0/g, " ")
   );
 }
 

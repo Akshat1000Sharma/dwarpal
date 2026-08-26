@@ -7,6 +7,7 @@ rather than a static in-stock flag.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -107,21 +108,53 @@ def browse(
     return _entries(session, products)
 
 
+# Words that carry no information about which product is wanted. An agent asking for "one pack of
+# Nilgiri black tea" is asking for tea, and a merchant that answers only when the phrasing happens
+# to be a substring of its own title is not readable by a machine that speaks English.
+_NOISE_WORDS = frozenset(
+    {
+        "a", "an", "and", "any", "are", "as", "at", "box", "buy", "can", "find", "for", "from",
+        "get", "give", "has", "have", "i", "in", "is", "it", "just", "looking", "me", "my", "need",
+        "of", "on", "one", "or", "pack", "packet", "please", "some", "search", "the", "to", "two",
+        "unit", "units", "want", "with", "would", "you", "your",
+    }
+)
+
+
+def _terms(query: str) -> list[str]:
+    """The words worth matching on, longest first so the most specific one decides the order."""
+    words = re.split(r"[^0-9A-Za-z]+", query.strip().lower())
+    meaningful = [w for w in words if len(w) > 1 and w not in _NOISE_WORDS]
+    return sorted(dict.fromkeys(meaningful), key=len, reverse=True)
+
+
+_MAX_TERMS = 12
+
+
 def search(session: Session, query: str, *, limit: int = 25) -> list[CatalogEntry]:
-    pattern = f"%{query.strip()}%"
-    statement = (
-        select(Product)
-        .where(
-            or_(
-                Product.title.ilike(pattern),
-                Product.description.ilike(pattern),
-                Product.sku.ilike(pattern),
-                Product.category.ilike(pattern),
-            )
-        )
-        .order_by(Product.sku)
-        .limit(limit)
-    )
+    """Find items matching a query, which may be a phrase rather than a keyword.
+
+    An item matches when every meaningful word in the query appears somewhere in its text. That is
+    deliberately stricter than matching any word: an agent asking for "black tea" wants the tea,
+    not everything black and everything tea-like. A query with no meaningful words lists the
+    catalog, because an agent that has lost its way needs to see what is actually for sale.
+    """
+    # One predicate is built per term against four columns, and the query is agent-supplied, so
+    # the term count is bounded rather than left to whatever arrives.
+    terms = _terms(query)[:_MAX_TERMS]
+    statement = select(Product).order_by(Product.sku).limit(limit)
+    if terms:
+        statement = select(Product).where(
+            *[
+                or_(
+                    Product.title.ilike(f"%{term}%"),
+                    Product.description.ilike(f"%{term}%"),
+                    Product.sku.ilike(f"%{term}%"),
+                    Product.category.ilike(f"%{term}%"),
+                )
+                for term in terms
+            ]
+        ).order_by(Product.sku).limit(limit)
     return _entries(session, list(session.scalars(statement).all()))
 
 

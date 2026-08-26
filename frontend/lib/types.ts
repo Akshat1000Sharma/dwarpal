@@ -215,11 +215,19 @@ export type CheckoutRow = {
   expires_at: string;
 };
 
+/**
+ * A technique is one attack idea. A case is that idea executed against one item, issuing tier and
+ * amount. Both are reported, and neither stands in for the other.
+ *
+ * The per-case `results` list is only sent when the endpoint is asked for it with `full=true`,
+ * because it is most of the artifact and only the scorecards page renders it.
+ */
 export type AttackScorecard = {
   generated_at: string;
   merchant: string;
   adversarial: {
     total: number;
+    techniques: number;
     blocked: number;
     passed: number;
     missed: number;
@@ -227,16 +235,30 @@ export type AttackScorecard = {
   };
   benign: {
     total: number;
+    techniques: number;
     allowed: number;
     escalated_to_human: number;
     false_positives: number;
     false_positive_rate: number;
+    settled_without_asking: number;
   };
   families: string[];
+  techniques: string[];
+  by_technique: Array<{
+    technique: string;
+    family: string;
+    cases: number;
+    blocked: number;
+    passed: number;
+    missed: number;
+  }>;
   misses: Array<Record<string, unknown>>;
   false_positive_detail: Array<Record<string, unknown>>;
-  results: Array<{
+  settled_without_asking_detail: Array<Record<string, unknown>>;
+  results_count: number;
+  results?: Array<{
     id: string;
+    technique: string;
     family: string;
     kind: string;
     description: string;
@@ -253,7 +275,8 @@ export type DisputeReport = {
   baseline: { defensible: number; defence_rate: number; mean_strength: number };
   improvement: number;
   refund_recommended: Array<{ case_id: string; strength_score: number; weaknesses: string[] }>;
-  disputes: Array<{
+  disputes_count: number;
+  disputes?: Array<{
     case_id: string;
     correlation_id: string;
     transaction_outcome: string;

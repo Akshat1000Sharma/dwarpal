@@ -25,6 +25,11 @@ UNVERIFIED_TIER = "unverified"
 # but the last one would vanish and the merchant would refuse their credentials as unsigned.
 _PUBLISH_LOCK = threading.Lock()
 
+# Published keys are re-read on every verification, and a credential whose kid matches nothing is
+# checked against all of them. Mock authorities mint a key per agent, so the file is capped: a real
+# authority publishes a handful, not thousands.
+PUBLISHED_KEY_LIMIT = 256
+
 
 class TrustRegistryError(RuntimeError):
     """Raised when the trust registry is missing or malformed."""
@@ -256,7 +261,7 @@ def publish_key(issuer_id: str, jwk: dict[str, Any]) -> Path:
                 existing = []
         if jwk not in existing:
             existing.append(jwk)
-        _write_atomically(path, {"keys": existing})
+        _write_atomically(path, {"keys": existing[-PUBLISHED_KEY_LIMIT:]})
     return path
 
 

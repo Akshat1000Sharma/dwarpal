@@ -5,7 +5,8 @@ Payments Protocol reference implementation:
     code/sdk/schemas/
 
 They are redistributed here under the Apache License, Version 2.0, the licence of that project.
-A copy of the licence is available at http://www.apache.org/licenses/LICENSE-2.0
+A verbatim copy of that licence is in the LICENSE file beside this one, as section 4(a) of the
+licence requires of anyone redistributing the work.
 
 They are vendored rather than fetched at runtime so that conformance checking works offline and in
 CI, and so that the exact schema revision Dwarpal was built against is recorded in this repository.

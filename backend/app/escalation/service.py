@@ -19,6 +19,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.ap2.jose import hash_payload
+from app.connect.service import ConnectionError_, normalise_number
 from app.db.base import utcnow
 from app.db.models import Escalation, EscalationResponse, EscalationStatus
 from app.escalation.whatsapp import (
@@ -68,13 +69,18 @@ def raise_escalation(
     currency: str,
     fingerprint: str,
     cart_summary: str,
+    issuer_id: str | None = None,
     transport: WhatsAppTransport | None = None,
     deadline_seconds: int | None = None,
+    notify: bool = True,
 ) -> Escalation:
     """Create the escalation, then attempt delivery.
 
     Delivery failure does not approve anything. The escalation still exists with its deadline
     running, so a channel outage resolves to a denial rather than to a purchase.
+
+    ``notify`` is false when the person is already at the screen, where messaging a second device
+    would be theatre. Nothing else changes: the deadline runs, and the answer is still a signature.
     """
     deadline = deadline_seconds or settings.ESCALATION_DEADLINE_SECONDS
     escalation = Escalation(
@@ -86,14 +92,21 @@ def raise_escalation(
         amount_minor=amount_minor,
         currency=currency,
         cart_fingerprint=fingerprint,
+        issuer_id=issuer_id,
         status=EscalationStatus.PENDING,
         deadline_at=utcnow() + timedelta(seconds=deadline),
     )
     session.add(escalation)
     session.flush()
 
+    if not notify:
+        # No message was sent, so nobody was asked over this channel and no inbound reply on it
+        # can be this person's answer. sent_to stays empty and record_answer refuses accordingly.
+        return escalation
+
     sender = transport or default_transport()
     recipient = settings.ESCALATION_HUMAN_WHATSAPP
+    escalation.sent_to = normalise_number(recipient)
     if not recipient:
         escalation.delivery_error = "ESCALATION_HUMAN_WHATSAPP is not configured"
         session.flush()
@@ -109,11 +122,9 @@ def raise_escalation(
         "constraint_text": constraint_text,
     }
 
-    # An approved template is the only thing that reaches a quiet inbox, so it is tried first when
-    # one is configured. It can be unavailable for reasons outside this code, most often because it
-    # is still awaiting review, and refusing to ask the human at all would be a worse answer than
-    # asking them by the route that does work. The free-form message only delivers inside the
-    # 24 hour window, so this is a fallback rather than a replacement.
+    # An approved template is the only route into a quiet inbox, so it is tried first. When it is
+    # unavailable, usually still awaiting review, asking by the route that does work beats not
+    # asking; the free-form message only delivers inside the 24 hour window, so it is a fallback.
     routes: list[tuple[str, dict[str, Any]]] = []
     if settings.META_TEMPLATE_NAME:
         routes.append((
@@ -176,12 +187,20 @@ def record_answer(
     answer: str,
     *,
     message_id: str | None = None,
+    from_number: str | None = None,
+    proof: str | None = None,
     now: datetime | None = None,
 ) -> AnswerOutcome:
-    """Apply an answer exactly once.
+    """Apply an answer exactly once, from the person who was asked.
 
     The state change is a conditional UPDATE guarded on the row still being pending, so two
     concurrent replies cannot both win. Whatever happens, the attempt is recorded.
+
+    ``from_number`` is required of any channel where the sender is self-asserted, which is every
+    inbound message. The escalation id travels back to the agent in its own 202, and a plain text
+    reply is accepted, so without this an agent could answer its own question from any handset.
+    Callers that have already established authority another way, such as a confirmation signed by
+    the issuing surface, pass nothing.
     """
     moment = now or utcnow()
     escalation = session.get(Escalation, escalation_id)
@@ -196,10 +215,23 @@ def record_answer(
                 accepted=accepted,
                 ignored_reason=reason,
                 raw_message_id=message_id,
+                proof=proof,
                 received_at=moment,
             )
         )
         session.flush()
+
+    if from_number is not None:
+        # sent_to is empty when this escalation was never put on this channel, either because the
+        # person was at the screen or because no recipient is configured. Nobody was asked here,
+        # so nobody can answer here.
+        try:
+            claimed = normalise_number(from_number)
+        except ConnectionError_:
+            claimed = None
+        if not escalation.sent_to or claimed != escalation.sent_to:
+            log(False, "sender_is_not_the_principal")
+            return AnswerOutcome(False, escalation.status, "sender_is_not_the_principal")
 
     if answer not in ("approve", "deny"):
         log(False, "uninterpretable_answer")
@@ -286,18 +318,21 @@ def as_evidence(session: Session, escalation: Escalation) -> dict[str, Any]:
         "constraint": escalation.constraint_text,
         "amount": {"amount": escalation.amount_minor, "currency": escalation.currency},
         "cart_fingerprint": escalation.cart_fingerprint,
+        "issuer_id": escalation.issuer_id,
         "status": escalation.status,
         "created_at": escalation.created_at.isoformat(),
         "deadline_at": escalation.deadline_at.isoformat(),
         "answered_at": escalation.answered_at.isoformat() if escalation.answered_at else None,
         "channel_message_id": escalation.channel_message_id,
         "delivery_error": escalation.delivery_error,
+        "sent_to": escalation.sent_to,
         "responses": [
             {
                 "answer": r.answer,
                 "accepted": r.accepted,
                 "ignored_reason": r.ignored_reason,
                 "received_at": r.received_at.isoformat(),
+                "proof": r.proof,
             }
             for r in responses
         ],

@@ -78,6 +78,23 @@ def test_every_image_has_a_recorded_source_and_licence(seed: list[dict[str, obje
         assert entry.get("url"), f"{sku} has no upstream url recorded"
         assert entry.get("licence"), f"{sku} has no licence recorded"
         assert entry.get("page", "").startswith("https://"), f"{sku} has no source page"
+        assert entry.get("changes"), f"{sku} does not say how the vendored copy was modified"
+
+
+def test_every_attributed_image_names_its_creator(seed: list[dict[str, object]]) -> None:
+    """CC BY and CC BY-SA oblige us to credit the photographer by name, and CC0 does not.
+
+    Serving somebody's photograph without their name is the one licence term this repository could
+    breach by omission, so it fails the suite rather than shipping.
+    """
+    credits = json.loads(CREDITS.read_text(encoding="utf-8"))
+    missing = [
+        sku
+        for sku, entry in credits.items()
+        if not str(entry.get("licence", "")).upper().startswith("CC0")
+        and not str(entry.get("author", "")).strip()
+    ]
+    assert not missing, f"these images require attribution and name no author: {missing}"
 
 
 def test_the_catalog_document_carries_the_image(seeded: Session) -> None:

@@ -29,6 +29,7 @@ STATUS_FOR_CODE: dict[ReasonCode, int] = {
     ReasonCode.CRED_REPLAYED: 409,
     ReasonCode.CHECKOUT_UNKNOWN: 404,
     ReasonCode.CHECKOUT_EXPIRED: 409,
+    ReasonCode.CHECKOUT_ALREADY_SETTLED: 409,
     ReasonCode.CHECKOUT_BINDING_MISMATCH: 409,
     ReasonCode.CART_ALTERED_AFTER_SIGNING: 409,
     ReasonCode.PRICE_DRIFT: 409,
@@ -41,7 +42,7 @@ STATUS_FOR_CODE: dict[ReasonCode, int] = {
     ReasonCode.VELOCITY_SPEND_EXCEEDED: 429,
     ReasonCode.VELOCITY_COUNT_EXCEEDED: 429,
     ReasonCode.ESCALATION_REQUIRED: 202,
-    # Spec section 5: the degraded path answers with the payment-required status and a challenge
+    # The degraded path answers with the payment-required status and a challenge
     # naming exactly which credentials would unlock the attempt.
     ReasonCode.UNVERIFIED_CEILING_EXCEEDED: 402,
     ReasonCode.UNVERIFIED_CATEGORY_FORBIDDEN: 402,

@@ -50,3 +50,10 @@ out/
 
 # Generated reports
 reports/
+
+# The upstream AP2 samples, fetched by scripts/run_reference_agent.*
+.reference-agent/
+
+# Logs and mandate stores the reference-agent tooling writes beside itself when run directly
+.logs/
+.temp-db/

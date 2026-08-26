@@ -10,23 +10,36 @@ module is that mock, and it is deliberately shared by three callers so they cann
 Every credential it produces is validated against the published AP2 JSON Schemas before it goes on
 the wire, so the corpus cannot pass by feeding Dwarpal something the specification would reject.
 
-The ``Tamper`` options exist because the attack families in specification section 12 require
-forging, replaying and re-binding credentials at the byte level.
+The ``Tamper`` options exist because the adversarial corpus has to forge, replay and re-bind
+credentials at the byte level.
 """
 
 from __future__ import annotations
 
+import json
 import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from app.ap2.jose import KeyPair, generate_keypair, sha256_b64url
+from app.ap2.jose import (
+    KeyPair,
+    b64url_decode,
+    b64url_encode,
+    canonical_json,
+    decode_jws_unverified,
+    generate_keypair,
+    sha256_b64url,
+    sign_jws,
+)
 from app.ap2.schema_validation import assert_conforms
 from app.ap2.sdjwt import SD, attach_key_binding, issue, parse
 from app.ap2.vocabulary import (
+    CHECKOUT_JWT_TYP,
+    CONFIRMATION_JWT_TYP,
     EXTENSION_CONSTRAINTS_CLAIM,
     NATURAL_LANGUAGE_CONSTRAINT,
+    PRESENCE_JWT_TYP,
     CheckoutConstraint,
     PaymentConstraint,
     Vct,
@@ -97,6 +110,80 @@ class Tamper:
     payment_instrument: dict[str, Any] | None = None
     payee: dict[str, Any] | None = None
     omit_line_item_constraint: bool = False
+    signing_algorithm: str | None = None
+    duplicate_disclosure: bool = False
+    mutate_disclosure: bool = False
+    key_binding_audience: str | None = None
+    key_binding_nonce: str | None = None
+    key_binding_age_seconds: int = 0
+    payment_currency: str | None = None
+    pisp: dict[str, Any] | None = None
+    checkout_jwt_from_stranger: bool = False
+    presence_age_seconds: int = 0
+    presence_checkout_hash: str | None = None
+    presence_issuer_id: str | None = None
+    forge_presence_signature: bool = False
+
+
+def _retag_algorithm(token: str, algorithm: str) -> str:
+    """Rewrite the issuer JWT header to claim a different algorithm.
+
+    Everything downstream is left untouched, which is the attack: a verifier that trusts the header
+    over its own policy would either skip the check entirely (``none``) or verify a symmetric MAC
+    against a public value it treats as a secret.
+    """
+    issuer_jwt, separator, remainder = token.partition("~")
+    header_segment, payload_segment, signature_segment = issuer_jwt.split(".")
+    header = json.loads(b64url_decode(header_segment))
+    header["alg"] = algorithm
+    rebuilt = ".".join(
+        [
+            b64url_encode(canonical_json(header)),
+            payload_segment,
+            "" if algorithm == "none" else signature_segment,
+        ]
+    )
+    return rebuilt + separator + remainder
+
+
+def _rewrite_disclosures(token: str, mutate: bool, duplicate: bool) -> str:
+    """Tamper with the disclosure list without disturbing the issuer signature.
+
+    ``mutate`` re-salts one disclosure, so it is still well formed JSON but hashes to a digest the
+    issuer never committed to. ``duplicate`` presents one twice. Both are the holder assembling a
+    presentation from parts, which RFC 9901 requires a verifier to reject.
+    """
+    parts = token.split("~")
+    issuer_jwt, disclosures = parts[0], [d for d in parts[1:] if d]
+    if not disclosures:
+        return token
+    if mutate:
+        decoded = json.loads(b64url_decode(disclosures[0]))
+        decoded[0] = b64url_encode(secrets.token_bytes(16))
+        disclosures[0] = b64url_encode(canonical_json(decoded))
+    if duplicate:
+        disclosures.append(disclosures[0])
+    return issuer_jwt + "~" + "".join(d + "~" for d in disclosures)
+
+
+def _apply_token_tamper(token: str, tamper: Tamper) -> str:
+    if tamper.signing_algorithm:
+        token = _retag_algorithm(token, tamper.signing_algorithm)
+    if tamper.mutate_disclosure or tamper.duplicate_disclosure:
+        token = _rewrite_disclosures(token, tamper.mutate_disclosure, tamper.duplicate_disclosure)
+    return token
+
+
+def _resign_checkout_as_stranger(checkout_jwt: str) -> tuple[str, str]:
+    """Re-sign the merchant's Checkout with a key that is not the merchant's.
+
+    The hash is recomputed so it still covers the token it claims to. Without that the binding
+    check refuses on the hash and the merchant-key check is never reached, which would leave this
+    technique proving something weaker than it says.
+    """
+    _header, payload = decode_jws_unverified(checkout_jwt)
+    forged = sign_jws(payload, generate_keypair("stranger-merchant#key"), typ=CHECKOUT_JWT_TYP)
+    return forged, sha256_b64url(forged.encode("ascii"))
 
 
 @dataclass
@@ -115,6 +202,7 @@ class MandateSpec:
     instrument: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_INSTRUMENT))
     execution_not_before: str | None = None
     execution_not_after: str | None = None
+    allowed_pisps: list[dict[str, Any]] | None = None
 
 
 def line_item_requirement(
@@ -243,6 +331,13 @@ def build_open_payment_mandate(
                 "max_occurrences": spec.max_occurrences,
             }
         )
+    if spec.allowed_pisps is not None:
+        constraints.append(
+            {
+                "type": PaymentConstraint.ALLOWED_PISPS.value,
+                "allowed": [SD(dict(entry)) for entry in spec.allowed_pisps],
+            }
+        )
     if spec.execution_not_before or spec.execution_not_after:
         constraints.append(
             {
@@ -307,15 +402,50 @@ def build_closed_payment_mandate(
             "amount": tamper.payment_amount_minor
             if tamper.payment_amount_minor is not None
             else amount_minor,
-            "currency": spec.currency,
+            "currency": tamper.payment_currency or spec.currency,
         },
         "payment_instrument": tamper.payment_instrument or dict(spec.instrument),
         "iat": iat,
         "exp": iat + 900,
     }
+    if tamper.pisp is not None:
+        claims["pisp"] = dict(tamper.pisp)
     assert_conforms("payment_mandate", claims)
     signer = generate_keypair("stranger#key") if tamper.wrong_agent_key else principals.agent
     return issue(claims, signer)
+
+
+def issue_presence_attestation(
+    principals: Principals,
+    *,
+    checkout_hash: str,
+    method: str = "surface_confirmation",
+    subject: str = "human:dwarpal-demo-principal",
+    tamper: Tamper | None = None,
+    now: datetime | None = None,
+) -> str:
+    """What a trusted surface signs when a person is actually at it.
+
+    Bound to one Checkout and stamped with the moment the person was observed, because presence is
+    a claim about a specific cart at a specific instant. It grants nothing on its own: the open
+    mandates still carry the authority, and the kernel still evaluates every limit.
+    """
+    tamper = tamper or Tamper()
+    moment = now or utcnow()
+    observed_at = int(moment.timestamp()) - tamper.presence_age_seconds
+    claims = {
+        "iss": tamper.presence_issuer_id or principals.issuer_id,
+        "sub": subject,
+        "checkout_hash": tamper.presence_checkout_hash or checkout_hash,
+        "method": method,
+        "nonce": secrets.token_hex(8),
+        "iat": observed_at,
+        "exp": observed_at + 900,
+    }
+    signer = generate_keypair("forged-surface#key") if tamper.forge_presence_signature else (
+        principals.issuer
+    )
+    return sign_jws(claims, signer, typ=PRESENCE_JWT_TYP)
 
 
 def digest_of(token: str) -> str:
@@ -359,10 +489,18 @@ def issue_open_mandates(
     """Sign the pair of open mandates once, as a trusted surface would."""
     tamper = tamper or Tamper()
     moment = now or utcnow()
-    open_checkout = build_open_checkout_mandate(principals, spec, tamper=tamper, now=moment)
+    # Token-level tampering happens before the digest is taken, so the payment mandate's reference
+    # constraint still points at the token that is actually presented. Otherwise every one of these
+    # techniques would refuse on the reference mismatch instead of on what it means to test.
+    open_checkout = _apply_token_tamper(
+        build_open_checkout_mandate(principals, spec, tamper=tamper, now=moment), tamper
+    )
     open_checkout_digest = digest_of(open_checkout)
-    open_payment = build_open_payment_mandate(
-        principals, spec, open_checkout_digest=open_checkout_digest, tamper=tamper, now=moment
+    open_payment = _apply_token_tamper(
+        build_open_payment_mandate(
+            principals, spec, open_checkout_digest=open_checkout_digest, tamper=tamper, now=moment
+        ),
+        tamper,
     )
     return IssuedMandates(
         open_checkout=open_checkout,
@@ -383,6 +521,7 @@ def present_issued(
     nonce: str = "dwarpal-nonce-1",
     tamper: Tamper | None = None,
     now: datetime | None = None,
+    human_present: bool = False,
 ) -> Presentation:
     """Present already-issued open mandates against one specific merchant Checkout."""
     tamper = tamper or Tamper()
@@ -395,14 +534,19 @@ def present_issued(
     open_checkout_digest = issued.open_checkout_digest
 
     binder = generate_keypair("stranger#key") if tamper.wrong_agent_key else principals.agent
-    kb_iat = int(moment.timestamp())
+    kb_iat = int(moment.timestamp()) - tamper.key_binding_age_seconds
+    kb_audience = tamper.key_binding_audience or aud
+    kb_nonce = tamper.key_binding_nonce or nonce
     if not tamper.drop_key_binding:
         open_checkout = attach_key_binding(
-            open_checkout, binder, audience=aud, nonce=nonce, issued_at=kb_iat
+            open_checkout, binder, audience=kb_audience, nonce=kb_nonce, issued_at=kb_iat
         )
         open_payment = attach_key_binding(
-            open_payment, binder, audience=aud, nonce=nonce, issued_at=kb_iat
+            open_payment, binder, audience=kb_audience, nonce=kb_nonce, issued_at=kb_iat
         )
+
+    if tamper.checkout_jwt_from_stranger:
+        checkout_jwt, checkout_hash = _resign_checkout_as_stranger(checkout_jwt)
 
     closed_checkout = build_closed_checkout_mandate(
         principals,
@@ -421,6 +565,14 @@ def present_issued(
         now=moment,
     )
 
+    presence = (
+        issue_presence_attestation(
+            principals, checkout_hash=checkout_hash, tamper=tamper, now=moment
+        )
+        if human_present
+        else None
+    )
+
     return Presentation(
         credentials=PresentedCredentials(
             open_checkout=open_checkout,
@@ -428,6 +580,7 @@ def present_issued(
             open_payment=open_payment,
             closed_payment=closed_payment,
             nonce=nonce,
+            presence=presence,
         ),
         open_checkout_digest=open_checkout_digest,
         nonce=nonce,
@@ -447,6 +600,7 @@ def present(
     nonce: str = "dwarpal-nonce-1",
     tamper: Tamper | None = None,
     now: datetime | None = None,
+    human_present: bool = False,
 ) -> Presentation:
     """Issue and present in one step, for a single-shot purchase."""
     issued = issue_open_mandates(principals, spec, tamper=tamper, now=now)
@@ -459,6 +613,7 @@ def present(
         nonce=nonce,
         tamper=tamper,
         now=now,
+        human_present=human_present,
     )
 
 
@@ -483,3 +638,29 @@ def spec_for_cart(
 
 def expires_at(seconds: int) -> str:
     return (utcnow() + timedelta(seconds=seconds)).isoformat()
+
+
+def sign_confirmation(
+    principals: Principals,
+    *,
+    escalation_id: str,
+    checkout_hash: str,
+    decision: str,
+    now: datetime | None = None,
+) -> str:
+    """The answer a present person gives to an escalation, signed by the surface they are at.
+
+    An approval has to be something only the human could have produced. A boolean in the request
+    body would be an approval the agent grants itself.
+    """
+    moment = now or utcnow()
+    issued_at = int(moment.timestamp())
+    claims = {
+        "iss": principals.issuer_id,
+        "escalation_id": escalation_id,
+        "checkout_hash": checkout_hash,
+        "decision": decision,
+        "iat": issued_at,
+        "exp": issued_at + 900,
+    }
+    return sign_jws(claims, principals.issuer, typ=CONFIRMATION_JWT_TYP)

@@ -40,8 +40,30 @@ function permitted(path: string[]): boolean {
   return ALLOWED_PREFIXES.some((prefix) => joined.startsWith(prefix));
 }
 
+/**
+ * The proxy attaches the merchant token to whatever it forwards, and one of the paths it forwards
+ * to mints a durable agent connection token. A cross-site page cannot read the response, but a
+ * plain form POST would still execute, so the request has to be shown to come from this origin.
+ *
+ * Browsers set Sec-Fetch-Site on every request and it cannot be set by script. A client that sends
+ * neither header is not a browser being driven by somebody else's page, which is the threat here.
+ */
+function sameOrigin(request: NextRequest): boolean {
+  const site = request.headers.get("sec-fetch-site");
+  if (site && site !== "same-origin" && site !== "none") return false;
+  const origin = request.headers.get("origin");
+  if (origin && origin !== request.nextUrl.origin) return false;
+  return true;
+}
+
 async function forward(request: NextRequest, path: string[]): Promise<Response> {
   const joined = path.join("/");
+  if (!sameOrigin(request)) {
+    return Response.json(
+      { error: "the dashboard proxy only serves its own origin" },
+      { status: 403 },
+    );
+  }
   if (!permitted(path)) {
     return Response.json(
       { error: "only the merchant surface is proxied through the dashboard origin" },

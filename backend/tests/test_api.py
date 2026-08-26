@@ -671,7 +671,9 @@ def test_whatsapp_answer_is_applied_once(client, seeded):
                             "messages": [
                                 {
                                     "id": "wamid.1",
-                                    "from": "919999999999",
+                                    # The number the escalation was sent to. An answer from any
+                                    # other number is not this person's answer and is not applied.
+                                    "from": escalation.sent_to or "",
                                     "type": "interactive",
                                     "interactive": {
                                         "type": "button_reply",
@@ -692,7 +694,7 @@ def test_whatsapp_answer_is_applied_once(client, seeded):
     headers = {"X-Hub-Signature-256": _meta_signature(body)}
 
     first = client.post("/webhooks/whatsapp", content=body, headers=headers).json()
-    assert first["applied"][0]["accepted"] is True
+    assert first["applied"][0]["accepted"] is True, first
     assert first["applied"][0]["status"] == "approved"
 
     second = client.post("/webhooks/whatsapp", content=body, headers=headers).json()

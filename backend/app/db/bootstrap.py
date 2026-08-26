@@ -29,13 +29,15 @@ CREATE TRIGGER trg_evidence_append_only
 """
 
 
-# create_all adds tables but never columns, and this project has no migration tool. Columns added
-# to an existing table therefore need saying once, here, in a form that is safe to run on every
-# start. Postgres supports IF NOT EXISTS on ADD COLUMN, so this is idempotent and costs nothing
-# after the first run.
+# create_all adds tables but never columns, and there is no migration tool here. Postgres supports
+# IF NOT EXISTS on ADD COLUMN, so saying them once is idempotent and costs nothing after the first
+# start.
 _ADDED_COLUMNS = """
 ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT NOT NULL DEFAULT '';
 ALTER TABLE products ADD COLUMN IF NOT EXISTS image_alt VARCHAR(256) NOT NULL DEFAULT '';
+ALTER TABLE escalations ADD COLUMN IF NOT EXISTS sent_to VARCHAR(32);
+ALTER TABLE escalation_responses ADD COLUMN IF NOT EXISTS proof TEXT;
+ALTER TABLE escalations ADD COLUMN IF NOT EXISTS issuer_id VARCHAR(256);
 """
 
 

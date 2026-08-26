@@ -163,7 +163,12 @@ def get_checkout(checkout_id: str, db: Annotated[Session, Depends(get_db)]) -> d
 
 
 class CompleteRequest(BaseModel):
-    """The four credentials, exactly as AP2 defines them."""
+    """The four credentials, exactly as AP2 defines them, plus one Dwarpal extension.
+
+    ``presence_attestation`` is optional and selects the human-present flow. Omitting it is the
+    human-not-present flow, which is unchanged. Supplying one does not widen anything: it is
+    verified like any other credential and recorded on the verdict.
+    """
 
     open_checkout_mandate: str
     closed_checkout_mandate: str
@@ -171,6 +176,7 @@ class CompleteRequest(BaseModel):
     closed_payment_mandate: str | None = None
     nonce: str | None = None
     buyer_region: str | None = None
+    presence_attestation: str | None = None
 
 
 @router.post("/checkout/complete")
@@ -199,6 +205,7 @@ def post_complete(
         open_payment=body.open_payment_mandate,
         closed_payment=body.closed_payment_mandate,
         nonce=body.nonce,
+        presence=body.presence_attestation,
     )
     outcome = complete(
         db,
@@ -243,3 +250,147 @@ def _semantic_client() -> Any:
         return get_client()
     except Exception:  # an unavailable model must not stop the gate working
         return None
+
+
+class ConfirmRequest(BaseModel):
+    """A present person's answer to an escalation, signed by the surface they are at."""
+
+    escalation_id: str
+    confirmation: str
+
+
+@router.post("/checkout/confirm")
+def post_confirm(
+    body: ConfirmRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, Any]:
+    """Answer an escalation in band, for a checkout where the person is at the keyboard.
+
+    In the human-not-present flow the question goes to WhatsApp and comes back through the webhook.
+    When a person is already at the surface, sending them a message to answer a question they are
+    sitting in front of is theatre, so the answer is accepted here instead.
+
+    What is not shortened is the checking. The answer has to be signed by the same trusted surface
+    that issued the mandate being spent, be inside its own expiry, and name both this escalation and
+    this Checkout. It is then applied through the same escalation service, so the deadline, the
+    answered-once rule and the cart binding all still hold. An agent cannot approve its own
+    escalation: it holds an agent key, and this accepts one surface's key and no other.
+    """
+    from app.ap2.jose import JoseError, decode_jws_unverified, public_key_from_jwk, verify_jws
+    from app.ap2.vocabulary import CONFIRMATION_JWT_TYP
+    from app.db.base import utcnow
+    from app.db.models import CheckoutSession, Escalation
+    from app.escalation import service as escalation_service
+    from app.trust.registry import get_registry
+
+    escalation = db.get(Escalation, body.escalation_id)
+    if escalation is None:
+        raise AgentError(
+            ReasonCode.CHECKOUT_UNKNOWN,
+            "no escalation with that id",
+            detail={"escalation_id": body.escalation_id},
+        )
+
+    try:
+        header, unverified = decode_jws_unverified(body.confirmation)
+    except JoseError as exc:
+        raise AgentError(
+            ReasonCode.PRESENCE_ATTESTATION_INVALID, f"malformed confirmation: {exc}"
+        ) from exc
+    if header.get("typ") != CONFIRMATION_JWT_TYP:
+        raise AgentError(
+            ReasonCode.PRESENCE_ATTESTATION_INVALID,
+            f"confirmation typ must be {CONFIRMATION_JWT_TYP}",
+        )
+
+    row = db.get(CheckoutSession, escalation.checkout_id)
+    if row is None:
+        raise AgentError(
+            ReasonCode.CHECKOUT_UNKNOWN,
+            "the escalation names a Checkout this merchant does not hold",
+        )
+
+    # Only the surface that issued the human's standing authority may answer for them, and it is the
+    # one recorded when the question was put, not whatever the Checkout points at now: an escalated
+    # Checkout is still presentable, and every presentation rewrites its mandate_id.
+    asked_of = escalation.issuer_id
+    if not asked_of:
+        raise AgentError(
+            ReasonCode.PRESENCE_ISSUER_UNTRUSTED,
+            "no issuing surface is recorded against this escalation, so nobody can answer for it",
+            detail={"escalation_id": escalation.id},
+        )
+
+    registry = get_registry()
+    issuer_id = str(unverified.get("iss") or "")
+    if issuer_id != asked_of:
+        raise AgentError(
+            ReasonCode.PRESENCE_ISSUER_UNTRUSTED,
+            "the confirmation was signed by an authority that did not issue this mandate",
+            detail={"signed_by": issuer_id or "nobody", "mandate_issued_by": asked_of},
+        )
+
+    keys = registry.keys_for(issuer_id)
+    if not keys:
+        raise AgentError(
+            ReasonCode.PRESENCE_ISSUER_UNTRUSTED,
+            f"{issuer_id or 'nobody'} is not a trusted surface",
+            detail={"issuer_id": issuer_id},
+        )
+
+    claims: dict[str, Any] | None = None
+    for key in keys:
+        try:
+            claims = verify_jws(body.confirmation, public_key_from_jwk(key))
+            break
+        except JoseError:
+            continue
+    if claims is None:
+        raise AgentError(
+            ReasonCode.PRESENCE_ATTESTATION_INVALID, "the confirmation signature is invalid"
+        )
+
+    # An answer given an hour ago is not an answer to a question asked now.
+    expires_at = claims.get("exp")
+    if expires_at is None:
+        raise AgentError(
+            ReasonCode.PRESENCE_ATTESTATION_INVALID, "the confirmation carries no expiry"
+        )
+    if int(utcnow().timestamp()) > int(expires_at) + settings.CREDENTIAL_CLOCK_SKEW_SECONDS:
+        raise AgentError(
+            ReasonCode.PRESENCE_ATTESTATION_STALE,
+            "the confirmation has expired",
+            detail={"exp": int(expires_at)},
+        )
+
+    if claims.get("escalation_id") != escalation.id:
+        raise AgentError(
+            ReasonCode.PRESENCE_BINDING_MISMATCH, "the confirmation answers a different escalation"
+        )
+    if claims.get("checkout_hash") != row.checkout_hash:
+        raise AgentError(
+            ReasonCode.PRESENCE_BINDING_MISMATCH, "the confirmation covers a different Checkout"
+        )
+
+    decision = str(claims.get("decision", ""))
+    if decision not in ("approve", "deny"):
+        raise AgentError(
+            ReasonCode.PRESENCE_ATTESTATION_INVALID, "the confirmation carries no usable decision"
+        )
+
+    outcome = escalation_service.record_answer(
+        db, escalation.id, decision, proof=body.confirmation
+    )
+    settled = escalation_service.resolve(
+        db, escalation.id, current_fingerprint=row.cart_fingerprint
+    )
+    return {
+        "escalation_id": escalation.id,
+        "accepted": outcome.accepted,
+        "ignored_reason": outcome.ignored_reason,
+        "status": settled.status,
+        "checkout_id": escalation.checkout_id,
+        "next": "present the credential chain again to settle the checkout"
+        if outcome.accepted and decision == "approve"
+        else "the escalation is closed",
+    }

@@ -1,9 +1,9 @@
 """s02 - the credential families, fired at the live HTTP door.
 
-The corpus already runs these in-process. This runs them through the real endpoint, because a
-verification step that is only ever called directly proves less than one an attacker could
-actually reach. Every case asserts the specific reason code, not merely that something was
-refused: refusing for the wrong reason is a bug that a pass-or-fail check would hide.
+The corpus already runs these in-process, against many items and tiers. This runs them through the
+real endpoint, because a verification step that is only ever called directly proves less than one
+an attacker could actually reach. Every case asserts the specific reason code, not merely that
+something was refused: refusing for the wrong reason is a bug that a pass-or-fail check would hide.
 """
 
 from __future__ import annotations
@@ -152,6 +152,118 @@ def run(ctx: Context) -> Suite:
             factory.Tamper(payment_instrument={"id": "pi_not_yours", "type": "CARD"}),
         )
         _expect(case, outcome, "CONSTRAINT_INSTRUMENT_NOT_ALLOWED")
+
+    with suite.case(
+        "algorithm_confusion_none",
+        proves="a header claiming alg none does not switch the signature check off",
+        expected="CRED_SIGNATURE_INVALID",
+    ) as case:
+        outcome = _attack(ctx, "s02-algnone", factory.Tamper(signing_algorithm="none"))
+        _expect(case, outcome, "CRED_SIGNATURE_INVALID")
+
+    with suite.case(
+        "algorithm_confusion_symmetric",
+        proves="the published verification key cannot be turned into a shared secret",
+        expected="CRED_SIGNATURE_INVALID",
+    ) as case:
+        outcome = _attack(ctx, "s02-alghs", factory.Tamper(signing_algorithm="HS256"))
+        _expect(case, outcome, "CRED_SIGNATURE_INVALID")
+
+    with suite.case(
+        "disclosure_tampered",
+        proves="a re-salted disclosure hashes to a digest the issuer never committed to",
+        expected="CRED_SIGNATURE_INVALID",
+    ) as case:
+        outcome = _attack(ctx, "s02-disclosure", factory.Tamper(mutate_disclosure=True))
+        _expect(case, outcome, "CRED_SIGNATURE_INVALID")
+
+    with suite.case(
+        "disclosure_duplicated",
+        proves="a presentation assembled from repeated parts is refused, per RFC 9901",
+        expected="CRED_SIGNATURE_INVALID",
+    ) as case:
+        outcome = _attack(ctx, "s02-dupdisc", factory.Tamper(duplicate_disclosure=True))
+        _expect(case, outcome, "CRED_SIGNATURE_INVALID")
+
+    with suite.case(
+        "key_binding_for_another_merchant",
+        proves="a proof of possession collected elsewhere cannot be spent here",
+        expected="CRED_SUBJECT_MISMATCH",
+    ) as case:
+        outcome = _attack(
+            ctx, "s02-kbaud", factory.Tamper(key_binding_audience="https://elsewhere.example")
+        )
+        _expect(case, outcome, "CRED_SUBJECT_MISMATCH")
+
+    with suite.case(
+        "key_binding_answers_another_challenge",
+        proves="the proof has to answer the nonce this merchant issued",
+        expected="CRED_SUBJECT_MISMATCH",
+    ) as case:
+        outcome = _attack(ctx, "s02-kbnonce", factory.Tamper(key_binding_nonce="not-the-nonce"))
+        _expect(case, outcome, "CRED_SUBJECT_MISMATCH")
+
+    with suite.case(
+        "key_binding_proof_is_stale",
+        proves="a live mandate does not make an hour-old possession proof acceptable",
+        expected="CRED_EXPIRED",
+    ) as case:
+        outcome = _attack(ctx, "s02-kbold", factory.Tamper(key_binding_age_seconds=4000))
+        _expect(case, outcome, "CRED_EXPIRED")
+
+    with suite.case(
+        "checkout_signed_by_a_stranger",
+        proves="only this merchant's own signature over a Checkout counts, hash notwithstanding",
+        expected="CHECKOUT_BINDING_MISMATCH",
+    ) as case:
+        outcome = _attack(ctx, "s02-strangerco", factory.Tamper(checkout_jwt_from_stranger=True))
+        _expect(case, outcome, "CHECKOUT_BINDING_MISMATCH")
+
+    with suite.case(
+        "payment_currency_substituted",
+        proves="the same number in another currency is not the same amount",
+        expected="CONSTRAINT_CURRENCY_MISMATCH",
+    ) as case:
+        outcome = _attack(ctx, "s02-currency", factory.Tamper(payment_currency="USD"))
+        _expect(case, outcome, "CONSTRAINT_CURRENCY_MISMATCH")
+
+    with suite.case(
+        "pisp_not_in_the_allowlist",
+        proves="an initiation provider the human did not name cannot route the payment",
+        expected="CONSTRAINT_PISP_NOT_ALLOWED",
+    ) as case:
+        allowed = {
+            "legal_name": "Authorised Payments Services Private Limited",
+            "brand_name": "AuthorisedPay",
+            "domain_name": "authorisedpay.example",
+            "id": "pisp_authorised",
+        }
+        unlisted = {
+            "legal_name": "Unlisted Initiation Services Limited",
+            "brand_name": "Unlisted",
+            "domain_name": "unlisted.example",
+            "id": "pisp_unlisted",
+        }
+        shopper = Shopper(ctx.client, "s02-pisp")
+        quote = shopper.quoted([("DWP-TEA-001", 1)])
+        issued = shopper.authorise(CART, allowed_pisps=[allowed])
+        presentation = shopper.present(
+            issued, quote, audience=ctx.audience, tamper=factory.Tamper(pisp=unlisted)
+        )
+        _status, outcome = shopper.complete(presentation)
+        _expect(case, outcome, "CONSTRAINT_PISP_NOT_ALLOWED")
+
+    with suite.case(
+        "amount_below_the_declared_minimum",
+        proves="a floor is authority too; only checking the ceiling settles carts under it",
+        expected="CONSTRAINT_AMOUNT_BELOW_MINIMUM",
+    ) as case:
+        shopper = Shopper(ctx.client, "s02-floor")
+        quote = shopper.quoted([("DWP-TEA-001", 1)])
+        issued = shopper.authorise(CART, amount_min_minor=900000)
+        presentation = shopper.present(issued, quote, audience=ctx.audience)
+        _status, outcome = shopper.complete(presentation)
+        _expect(case, outcome, "CONSTRAINT_AMOUNT_BELOW_MINIMUM")
 
     with suite.case(
         "malformed_credential",

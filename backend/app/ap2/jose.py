@@ -173,8 +173,11 @@ def decode_jws_unverified(token: str) -> tuple[dict[str, Any], dict[str, Any]]:
     try:
         header = json.loads(b64url_decode(parts[0]))
         payload = json.loads(b64url_decode(parts[1]))
-    except json.JSONDecodeError as exc:
-        raise JoseError(f"JWS segment is not JSON: {exc}") from exc
+    except ValueError as exc:
+        # ValueError and not JSONDecodeError: a segment that decodes to bytes which are not UTF-8
+        # raises UnicodeDecodeError, and bad base64 raises binascii.Error. Both reach here from
+        # unauthenticated input, so both have to become a refusal rather than a 500.
+        raise JoseError(f"JWS segment is not readable JSON: {exc}") from exc
     if not isinstance(header, dict) or not isinstance(payload, dict):
         raise JoseError("JWS header and payload must both be objects")
     return header, payload
