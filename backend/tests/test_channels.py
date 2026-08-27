@@ -38,8 +38,8 @@ def _stub_graph(monkeypatch, *, templates: list[dict[str, str]] | None = None,
         if "message_templates" in url:
             return 200, {"data": templates or []}
         return 200, {
-            "display_phone_number": "+91 80859 28343",
-            "verified_name": "Samvaad",
+            "display_phone_number": "+91 99999 00001",
+            "verified_name": "Dwarpal Demo",
             "quality_rating": "GREEN",
             "webhook_configuration": {
                 "application": webhook
@@ -60,8 +60,8 @@ def _named(report: channels.Report, needle: str) -> channels.Check:
 def _configure(monkeypatch, **overrides: str) -> None:
     defaults = {
         "META_ACCESS_TOKEN": "test-token",
-        "META_PHONE_NUMBER_ID": "1298154706713126",
-        "META_WABA_ID": "2417951275365258",
+        "META_PHONE_NUMBER_ID": "100000000000001",
+        "META_WABA_ID": "200000000000002",
         "ESCALATION_HUMAN_WHATSAPP": "+919876543210",
         "META_TEMPLATE_NAME": "",
         "META_TEMPLATE_LANGUAGE": "en",
@@ -154,7 +154,7 @@ def test_a_webhook_pointing_somewhere_else_is_caught(monkeypatch) -> None:
     assert "an-old-tunnel.example" in check.detail
 
 
-@pytest.mark.parametrize("number", ["", "not a number", "917067466990", "+0123"])
+@pytest.mark.parametrize("number", ["", "not a number", "919000000001", "+0123"])
 def test_a_recipient_that_would_never_deliver_is_caught(monkeypatch, number: str) -> None:
     _configure(monkeypatch, ESCALATION_HUMAN_WHATSAPP=number)
     _stub_graph(monkeypatch)
@@ -210,12 +210,12 @@ def test_the_preflight_never_sends_anything(monkeypatch) -> None:
 def _button_payload(phone_number_id: str, escalation_id: str) -> dict[str, Any]:
     return {
         "object": "whatsapp_business_account",
-        "entry": [{"id": "2417951275365258", "changes": [{"field": "messages", "value": {
+        "entry": [{"id": "200000000000002", "changes": [{"field": "messages", "value": {
             "messaging_product": "whatsapp",
-            "metadata": {"display_phone_number": "918085928343",
+            "metadata": {"display_phone_number": "919999900001",
                          "phone_number_id": phone_number_id},
             "messages": [{
-                "from": "917067466990", "id": "wamid.test", "type": "interactive",
+                "from": "919000000001", "id": "wamid.test", "type": "interactive",
                 "interactive": {"type": "button_reply",
                                 "button_reply": {"id": f"dwarpal_approve:{escalation_id}",
                                                  "title": "Approve"}},
@@ -234,7 +234,7 @@ def test_a_reply_on_another_number_of_the_same_account_is_ignored() -> None:
     """
     from app.escalation import whatsapp
 
-    mine, theirs = "1298154706713126", "1265280240001529"
+    mine, theirs = "100000000000001", "100000000000009"
 
     assert whatsapp.parse_inbound(_button_payload(mine, "esc-1"), phone_number_id=mine)
     assert whatsapp.parse_inbound(_button_payload(theirs, "esc-1"), phone_number_id=mine) == []
@@ -243,8 +243,8 @@ def test_a_reply_on_another_number_of_the_same_account_is_ignored() -> None:
 def test_the_numbers_a_payload_touches_are_reported() -> None:
     from app.escalation import whatsapp
 
-    payload = _button_payload("1265280240001529", "esc-1")
-    assert whatsapp.numbers_in(payload) == {"1265280240001529"}
+    payload = _button_payload("100000000000009", "esc-1")
+    assert whatsapp.numbers_in(payload) == {"100000000000009"}
 
 
 def test_a_payload_with_no_metadata_is_still_read() -> None:
@@ -253,12 +253,12 @@ def test_a_payload_with_no_metadata_is_still_read() -> None:
 
     payload = {
         "entry": [{"changes": [{"value": {"messages": [{
-            "from": "917067466990", "id": "wamid.x", "type": "interactive",
+            "from": "919000000001", "id": "wamid.x", "type": "interactive",
             "interactive": {"type": "button_reply",
                             "button_reply": {"id": "dwarpal_deny:esc-9", "title": "Deny"}},
         }]}}]}],
     }
-    answers = whatsapp.parse_inbound(payload, phone_number_id="1298154706713126")
+    answers = whatsapp.parse_inbound(payload, phone_number_id="100000000000001")
     assert len(answers) == 1 and answers[0].answer == "deny"
 
 
@@ -300,7 +300,7 @@ def test_only_the_number_that_was_asked_can_answer(db: Session, monkeypatch) -> 
     escalation_id = _pending(db, sent_to="+919876543210")
 
     outcome = escalation_service.record_answer(
-        db, escalation_id, "approve", from_number="+917067466990"
+        db, escalation_id, "approve", from_number="+919000000001"
     )
 
     assert not outcome.accepted
@@ -332,7 +332,7 @@ def test_an_answer_to_an_escalation_that_reached_nobody_is_not_applied(
     escalation_id = _pending(db, sent_to=None)
 
     outcome = escalation_service.record_answer(
-        db, escalation_id, "approve", from_number="+917067466990"
+        db, escalation_id, "approve", from_number="+919000000001"
     )
 
     assert not outcome.accepted
@@ -358,7 +358,7 @@ def test_the_refused_attempt_is_still_recorded(db: Session, monkeypatch) -> None
 
     monkeypatch.setattr(settings, "ESCALATION_HUMAN_WHATSAPP", "+919876543210")
     escalation_id = _pending(db, sent_to="+919876543210")
-    escalation_service.record_answer(db, escalation_id, "approve", from_number="+917067466990")
+    escalation_service.record_answer(db, escalation_id, "approve", from_number="+919000000001")
 
     rows = db.query(EscalationResponse).filter_by(escalation_id=escalation_id).all()
     assert [r.ignored_reason for r in rows] == ["sender_is_not_the_principal"]

@@ -55,6 +55,17 @@ Three rules the components enforce:
 Navigation is a single surface. `components/sidebar.tsx` is a 264px rail at `lg`, a 72px icon rail
 at `md`, and a focus-trapped drawer below that.
 
+The icon set in `public` is one artwork at several sizes. `dwarpal-mark-32.png`,
+`dwarpal-mark-192.png` and `dwarpal-mark-512.png` are the gate mark on a transparent ground, and
+`app/favicon.ico` carries the same mark at 16, 32, 48 and 64. `dwarpal-apple-touch-icon.png` is the
+one exception with a background, because iOS flattens transparency onto black.
+`dwarpal-og-card.png` is the social card, and the only place the white DWARPAL wordmark appears:
+it needs a dark ground to be legible, so it never appears in the light-themed chrome.
+
+All of them are cut from the logo master, which is not in the repository. The mark is the crop
+`(175, 116, 1079, 898)`, centred on a 940x940 transparent canvas and downscaled with Lanczos;
+renditions of 48px and below are sharpened afterwards.
+
 ## How it talks to the backend
 
 The URL exists in exactly one place, `lib/backend.ts`, which is `server-only`. Server Components

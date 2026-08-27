@@ -3,15 +3,40 @@
 import { useRef, useState } from "react";
 
 /**
- * The walkthrough, in a browser frame.
+ * The walkthrough.
  *
  * Three things matter here and they are all measurable. The aspect-ratio box reserves the space
- * before anything loads, so the video contributes nothing to cumulative layout shift. preload is
- * metadata, so the 2.6MB file is not on the critical path and the largest contentful paint stays
- * the headline. And it never plays until asked: autoplaying video with sound is the fastest way
- * to make somebody close a tab.
+ * before anything loads, so the video contributes nothing to cumulative layout shift, and the
+ * ratio is chosen by a CSS breakpoint rather than by script so it is already correct on the first
+ * paint. preload is metadata, so neither file is on the critical path and the largest contentful
+ * paint stays the headline. And it never plays until asked: autoplaying video with sound is the
+ * fastest way to make somebody close a tab.
+ *
+ * The landscape and portrait cuts are two files, not one file letterboxed twice. Both are in the
+ * markup because the choice between them has to stay in CSS; only the visible one is ever played.
  */
-export function LandingVideo({ src, poster }: { src: string; poster?: string }) {
+export function LandingVideo({
+  landscape,
+  portrait,
+  poster,
+}: {
+  landscape: string;
+  portrait: string;
+  poster?: string;
+}) {
+  return (
+    <>
+      <div className="sm:hidden">
+        <Player src={portrait} poster={poster} ratio="9 / 16" />
+      </div>
+      <div className="hidden sm:block">
+        <Player src={landscape} poster={poster} ratio="16 / 9" />
+      </div>
+    </>
+  );
+}
+
+function Player({ src, poster, ratio }: { src: string; poster?: string; ratio: string }) {
   const video = useRef<HTMLVideoElement>(null);
   const [started, setStarted] = useState(false);
 
@@ -25,16 +50,7 @@ export function LandingVideo({ src, poster }: { src: string; poster?: string }) 
 
   return (
     <div className="overflow-hidden rounded-[14px] border border-line bg-surface shadow-e3">
-      <div className="flex items-center gap-2 border-b border-line bg-sunken px-4 py-2.5">
-        <span className="h-2.5 w-2.5 rounded-full bg-[#e5e8ee]" aria-hidden="true" />
-        <span className="h-2.5 w-2.5 rounded-full bg-[#e5e8ee]" aria-hidden="true" />
-        <span className="h-2.5 w-2.5 rounded-full bg-[#e5e8ee]" aria-hidden="true" />
-        <span className="ml-3 truncate font-mono text-[11px] text-faint">
-          dwarpal - a purchase, end to end
-        </span>
-      </div>
-
-      <div className="relative bg-[#0b1b33]" style={{ aspectRatio: "16 / 9" }}>
+      <div className="relative bg-sunken" style={{ aspectRatio: ratio }}>
         <video
           ref={video}
           src={src}

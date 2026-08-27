@@ -29,14 +29,7 @@ export default function LoginPage() {
 
       <div className="relative w-full max-w-[880px]">
         <Link href="/" className="mb-10 flex items-center justify-center gap-2.5">
-          <Image
-            src="/icon-192x192.png"
-            alt=""
-            width={34}
-            height={34}
-            className="rounded-[8px]"
-            priority
-          />
+          <Image src="/dwarpal-mark-192.png" alt="" width={40} height={40} priority />
           <span className="text-[19px] font-semibold tracking-tight text-ink">Dwarpal</span>
         </Link>
 

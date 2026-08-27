@@ -176,7 +176,7 @@ def _check_shared_account(report: Report, version: str, token: str) -> None:
         "this account is not shared with other apps",
         not others,
         f"{len(apps)} app(s) subscribed"
-        + (f": {', '.join(str(a.get('name')) for a in others)} also receive every event"
+        + (f", {len(others)} of them not this one, each receiving every event"
            if others else ""),
         "Dwarpal ignores events for numbers that are not its own, so decisions here are safe. "
         "Those apps still see this merchant's traffic and may reply to it from their own numbers. "

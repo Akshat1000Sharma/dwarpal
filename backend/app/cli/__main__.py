@@ -8,6 +8,7 @@
     python -m app.cli verify-chain      in-process chain check
     python -m app.cli seed              create the schema and seed the catalog
     python -m app.cli check-channels    confirm the outbound channels are actually configured
+    python -m app.cli probe-templates   send one message through each template, proving they work
 """
 
 from __future__ import annotations
@@ -211,6 +212,35 @@ def cmd_check_channels(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_probe_templates(args: argparse.Namespace) -> int:
+    """Prove the template path delivers, by using it.
+
+    Guarded the same way the scenario suite is: a real message reaches a real phone, so the caller
+    has to say so explicitly rather than discovering it afterwards.
+    """
+    from app.template_probe import send_template_probe
+
+    if not args.allow_live_whatsapp:
+        print("This sends real WhatsApp messages to the configured recipient.")
+        print("  Re-run with --allow-live-whatsapp if that is what you want.")
+        return 2
+
+    results = send_template_probe(to_number=args.to)
+    for result in results:
+        mark = "ok  " if result.ok else "FAIL"
+        named = f"{result.template} ({result.language})" if result.template else "not configured"
+        print(f"  [{mark}] {result.label} template")
+        print(f"         {named}")
+        if result.message_id:
+            print(f"         {result.message_id}")
+        if result.error:
+            print(f"         {result.error}")
+    failed = [r for r in results if not r.ok]
+    print()
+    print(f"{len(results) - len(failed)} of {len(results)} template sends accepted")
+    return 1 if failed else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli", description="Dwarpal utilities.")
     parser.add_argument(
@@ -233,6 +263,18 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser(
         "check-channels", help="confirm Razorpay and WhatsApp are configured, sending nothing"
     ).set_defaults(fn=cmd_check_channels)
+
+    probe = sub.add_parser(
+        "probe-templates",
+        help="send one message through each configured template and print the message ids",
+    )
+    probe.add_argument(
+        "--allow-live-whatsapp",
+        action="store_true",
+        help="required, because this sends real messages to the configured recipient",
+    )
+    probe.add_argument("--to", default=None, help="override the recipient, E.164")
+    probe.set_defaults(fn=cmd_probe_templates)
 
     export = sub.add_parser("export-evidence", help="write the evidence chain as JSONL")
     export.add_argument("--out", default="./reports/evidence.jsonl")

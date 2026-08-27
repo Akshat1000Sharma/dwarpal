@@ -248,14 +248,7 @@ export function Sidebar({ persona }: { persona: Persona }) {
 
 function Mark() {
   return (
-    <Image
-      src="/icon-192x192.png"
-      alt=""
-      width={28}
-      height={28}
-      className="rounded-[7px]"
-      priority
-    />
+    <Image src="/dwarpal-mark-192.png" alt="" width={34} height={34} priority />
   );
 }
 

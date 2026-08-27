@@ -54,14 +54,7 @@ function SiteHeader() {
     <header className="sticky top-0 z-40 border-b border-line bg-surface/85 backdrop-blur">
       <div className="mx-auto flex h-[60px] w-full max-w-[1180px] items-center justify-between px-5 sm:px-6">
         <Link href="/" className="flex items-center gap-2.5">
-          <Image
-            src="/icon-192x192.png"
-            alt=""
-            width={28}
-            height={28}
-            className="rounded-[7px]"
-            priority
-          />
+          <Image src="/dwarpal-mark-192.png" alt="" width={34} height={34} priority />
           <span className="text-[15px] font-semibold tracking-tight text-ink">Dwarpal</span>
         </Link>
         <nav className="flex items-center gap-2 sm:gap-5">
@@ -144,7 +137,10 @@ function Hero() {
           </div>
 
           <Reveal delay={80}>
-            <LandingVideo src="/landing_page_video.mp4" />
+            <LandingVideo
+              landscape="/walkthrough-landscape.mp4"
+              portrait="/walkthrough-portrait.mp4"
+            />
             <p className="mt-3 text-center text-[12px] text-faint">
               One agent, one cart, four credentials, one verdict, one evidence packet.
             </p>
@@ -456,8 +452,8 @@ const LIMITS = [
     body: "Dwarpal is designed for NPCI's Unified Agent Protocol, which is in development and unpublished. Designed for UAP, compliant with AP2, and never a word more than that.",
   },
   {
-    title: "Neither approved WhatsApp template exists",
-    body: "Escalations and receipts deliver, and a tapped Approve reaches the webhook and settles the escalation. What is missing is the two approved Utility templates the sends prefer, one for the escalation and one for the receipt: both are configured by name and neither was ever created on this WhatsApp Business Account, so every send falls back to a free-form message. That works only inside the 24 hour window after the person last messaged the business number. Outside it, an escalation would not be delivered at all, and would become a denial at its deadline. The preflight reports both by name rather than letting them fail at send time.",
+    title: "WhatsApp is the only channel, and nobody else can reproduce it",
+    body: "Dwarpal tells the human over WhatsApp and nowhere else. There is no Slack app, no Telegram bot, no mobile push and no mail over SMTP, and none of them is claimed. Two approved Utility templates carry it: one for the escalation, with its Approve and Deny buttons, and one for the receipt, which covers a purchase that completed, was refused, or was reversed after a revocation. Neither can be exercised by anyone but this repository's owner, because a template belongs to the WhatsApp Business Account that approved it. A new deployer has to create their own account, recreate both templates and get Meta to approve them before that path runs at all.",
   },
 ];
 
@@ -497,6 +493,7 @@ function Connects() {
               body="A receipt when an agent buys, the reason code when it is refused, and a refund notice when a capture had to be reversed. When the kernel cannot decide alone, the escalation arrives with Approve and Deny buttons."
               points={[
                 "Only ever to a number registered on a connection",
+                "Two approved Utility templates, one for the escalation and one for the receipt",
                 "An escalation nobody answers is a denial, never a pause",
                 "Every send is logged with its route and status, failures included",
               ]}
@@ -670,7 +667,7 @@ function SiteFooter() {
     <footer className="border-t border-line bg-surface">
       <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-4 px-5 py-8 sm:flex-row sm:items-center sm:justify-between sm:px-6">
         <div className="flex items-center gap-2.5">
-          <Image src="/icon-192x192.png" alt="" width={24} height={24} className="rounded-[6px]" />
+          <Image src="/dwarpal-mark-192.png" alt="" width={28} height={28} />
           <span className="text-[13px] text-muted">
             Dwarpal, the AP2 merchant endpoint for Razorpay
           </span>

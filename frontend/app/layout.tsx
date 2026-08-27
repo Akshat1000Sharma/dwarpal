@@ -31,11 +31,11 @@ export const metadata: Metadata = {
   icons: {
     // app/favicon.ico is picked up by the file convention; these are the explicit sizes.
     icon: [
-      { url: "/favicon.png", type: "image/png", sizes: "32x32" },
-      { url: "/icon-192x192.png", type: "image/png", sizes: "192x192" },
-      { url: "/icon-512x512.png", type: "image/png", sizes: "512x512" },
+      { url: "/dwarpal-mark-32.png", type: "image/png", sizes: "32x32" },
+      { url: "/dwarpal-mark-192.png", type: "image/png", sizes: "192x192" },
+      { url: "/dwarpal-mark-512.png", type: "image/png", sizes: "512x512" },
     ],
-    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
+    apple: [{ url: "/dwarpal-apple-touch-icon.png", sizes: "180x180" }],
   },
   openGraph: {
     type: "website",
@@ -43,13 +43,13 @@ export const metadata: Metadata = {
     title: `${TITLE} - ${TAGLINE}`,
     description: DESCRIPTION,
     url: "/",
-    images: [{ url: "/og-image.png", width: 1200, height: 630, alt: TITLE }],
+    images: [{ url: "/dwarpal-og-card.png", width: 1200, height: 630, alt: TITLE }],
   },
   twitter: {
     card: "summary_large_image",
     title: `${TITLE} - ${TAGLINE}`,
     description: DESCRIPTION,
-    images: ["/og-image.png"],
+    images: ["/dwarpal-og-card.png"],
   },
 };
 

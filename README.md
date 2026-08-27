@@ -917,16 +917,18 @@ The buyer console's order creation was re-verified during this change: a run thr
 
 ### WhatsApp, verified end to end
 
-Driven against the live Meta Cloud API on 2026-08-25, against phone number `+91 80859 28343`
-("Samvaad", quality GREEN) and recipient `+91 70674 66990`.
+Driven against the live Meta Cloud API on 2026-08-25, against the merchant's verified business
+number `+91 8085x xxxxx` (quality GREEN) and recipient `+91 7067x xxxxx`. Numbers are masked here;
+which account they sit on is configuration, not part of the record.
 
 | Path | State | Evidence |
 |---|---|---|
 | Access token and phone number id | verified | System User token, scopes `whatsapp_business_messaging`, `whatsapp_business_management` |
 | Webhook verification handshake | verified | correct verify token answered 200 with the challenge echoed; a wrong one answered 403 |
 | App webhook subscription | verified | `whatsapp_business_account` object, active, `messages` field subscribed, callback pointing at the tunnel |
-| Outbound escalation, free-form | verified | delivered with Approve and Deny buttons, `wamid.HBgMOTE3...` |
-| Outbound escalation, template | **fails, and is handled** | the configured template does not exist; see below |
+| Outbound escalation, free-form | verified | delivered with Approve and Deny buttons, `wamid.HBgM...` |
+| Outbound escalation, template | verified | sent through the approved `en` template, accepted, `wamid.HBgM...MkQ5RjFGNEUxMkQ1QTYxOUExAA==` |
+| Outbound purchase receipt, template | verified | sent through the approved `en` template, accepted, `wamid.HBgM...RDM4QjRBMzczNDNBNzk0QzNFAA==` |
 | Outbound purchase receipt, completed | verified | sent, routed to the connection's number |
 | Outbound purchase receipt, refused | verified | sent, naming `ITEM_AGE_RESTRICTED` |
 | Outbound purchase receipt, compensated | verified | sent |
@@ -934,16 +936,17 @@ Driven against the live Meta Cloud API on 2026-08-25, against phone number `+91 
 | Inbound button reply | verified with a real tap | Approve tapped on a phone reached the webhook as `facebookexternalua`, signed, and settled the escalation |
 | Answered once | verified with real traffic | a second real tap on an already-settled escalation was recorded and ignored as `already_answered` |
 
-### The two templates Dwarpal needs
+### The two templates
 
-Dwarpal sends exactly two kinds of message, so it needs exactly two approved templates. Both are
-UTILITY. Neither exists on this account today: WhatsApp Business Account `2417951275365258`, the
-one the sending number belongs to, holds only `hello_world` and
-`3p_direct_integration_test_template`.
+Dwarpal sends exactly two kinds of message, so it uses exactly two templates. Both are UTILITY,
+both are published in `en`, and both are approved by Meta on the WhatsApp Business Account the
+sending number belongs to. The sends use them, and both have been exercised end to end: see
+`probe-templates` below.
 
 Templates are per account. A template approved on a different WhatsApp Business Account cannot be
 used by a number that belongs to this one, which is the most likely reason a template you believe
-is approved answers `132001 template name does not exist`.
+is approved answers `132001 template name does not exist`. `check-channels` reports the status of
+each one by name so that this is visible before a send needs it rather than after.
 
 **1. Escalation, the one with the buttons.** Raised when the kernel cannot settle a constraint on
 its own and has to ask the human. Five body parameters and two quick-reply buttons:
@@ -995,43 +998,39 @@ Reference: {{5}}
 | `{{4}}` | what happened | The purchase completed. / The purchase was refused: BUDGET_EXCEEDED. |
 | `{{5}}` | correlation reference | dwc_ae823f85046d4a8bb527b296f4ddca0a |
 
-Set `META_RECEIPT_TEMPLATE_NAME` and `META_RECEIPT_TEMPLATE_LANGUAGE` once it is approved.
+`META_RECEIPT_TEMPLATE_NAME` and `META_RECEIPT_TEMPLATE_LANGUAGE` name it and its locale.
 
-**What happens with neither.** Both paths fall back to a free-form message, which is what runs
-today and what was verified in this session. Meta only delivers free-form messages inside the 24
-hour window after the person last messaged the business number, so an escalation raised into a
-quiet inbox would not arrive at all. It would sit pending and become a denial at its deadline,
-because the timeout fails closed. That is safe, and it is not useful.
+**Why the templates matter.** Meta only delivers free-form messages inside the 24 hour window
+after the person last messaged the business number. Without an approved template, an escalation
+raised into a quiet inbox would not arrive at all: it would sit pending and become a denial at its
+deadline, because the timeout fails closed. That is safe, and it is not useful. An approved
+template delivers whether or not that window is open, which is the whole reason both exist.
 
-The escalation service tries the template first, records any failure in the escalation's
-`delivery_error`, and then falls back, so a template that is misconfigured or still awaiting review
-never silences the question. That was confirmed live: the template send failed with `132001`, the
-error was recorded, and the free-form message delivered.
+**The fallback stays anyway.** The escalation service tries the template first, records any failure
+in the escalation's `delivery_error`, and only then falls back to the free-form message, so a
+template that is later paused, rejected or renamed can never silence the question. That path was
+confirmed live while the templates were still in review: the template send failed, the error was
+recorded against the escalation, and the free-form message delivered.
 
-### This WhatsApp Business Account is shared with two other apps
+### Only this merchant's own number is ever acted on
 
-Three applications are subscribed to WABA `2417951275365258`: `dwarpal`, `Socialyfy` and
-`SAMVAAD-Dev`. A webhook subscription is made per account, not per app or per number, so **all
-three receive every event for both numbers on the account**.
+A WhatsApp Business Account can carry several numbers, and more than one application can be
+subscribed to it. A webhook subscription is made per account, not per app or per number, so every
+subscribed app receives every event for every number on the account. A reply intended for a
+different number can therefore arrive here.
 
-That is the explanation for a reply arriving from a number Dwarpal never sends from. On
-2026-08-25 a button was tapped on the Samvaad number at 06:07:19 and 06:07:21; five seconds later
-two messages went out from the Test Business number, `+91 93034 56309`. Dwarpal posts only to
-`META_PHONE_NUMBER_ID` and never replies to a tap at all, so those came from one of the other two
-apps, which received the same tap and answered it from its own number.
-
-Dwarpal now defends its own side of this. `parse_inbound` reads only events whose
+Dwarpal defends its own side of that. `parse_inbound` reads only events whose
 `metadata.phone_number_id` matches the configured number, and the webhook reports what it ignored:
 
 ```
-POST /webhooks/whatsapp   (a reply on the other number)
-{"received": true, "applied": [], "ignored_other_numbers": ["1265280240001529"]}
+POST /webhooks/whatsapp   (a reply on a number this merchant does not send from)
+{"received": true, "applied": [], "ignored_other_numbers": ["100000000000009"]}
 ```
 
-So somebody else's reply can never settle an escalation here. What it cannot fix is the other
-direction: those apps still see this merchant's traffic and may answer it. To stop that, unsubscribe
-them from the account in Meta's app settings, or give Dwarpal a WhatsApp Business Account of its
-own. `python -m app.cli check-channels` reports the situation whenever it holds.
+So a reply on another number can never settle an escalation here. What that cannot fix is the
+other direction: any other subscribed app still sees this merchant's traffic and may answer it
+from its own number. Give Dwarpal an account of its own if that matters.
+`python -m app.cli check-channels` reports whether the account is shared.
 
 **A note on the verify token.** The configured one contains a `#`. That is fine for Meta, which
 URL-encodes it properly, but it truncates any hand-written `curl` command that puts it in a query
@@ -1039,9 +1038,9 @@ string unencoded. If you test the handshake by hand, encode it.
 
 ### Checking the channels without sending anything
 
-The template defect above was invisible until an escalation needed it, because Meta accepts the
-send and answers with an error only for that one message, which the free-form fallback then
-quietly covers for. This is the command that asks the question directly:
+A template that is missing, misnamed or still in review is invisible until an escalation needs
+it, because Meta accepts the send and answers with an error only for that one message, which the
+free-form fallback then quietly covers for. This is the command that asks the question directly:
 
 ```bash
 cd backend && python -m app.cli check-channels
@@ -1056,18 +1055,64 @@ Set `META_WABA_ID` for the template check to work. It is the WhatsApp Business A
 appears as `entry[0].id` in any inbound webhook payload. Without it the check fails rather than
 skipping, because a check that quietly skips the thing it was written for is worse than no check.
 
-Its current output on this account:
+An excerpt of its current output, with identifiers masked:
 
 ```
   [ok  ] razorpay key is test mode
-  [ok  ] escalation recipient is E.164          +917067466990
+         key id rzp_test_...
+  [ok  ] escalation recipient is E.164
+         +917067xxxxx
   [ok  ] whatsapp credentials present
-  [ok  ] access token is valid                  SYSTEM_USER, whatsapp_business_management,
-                                                whatsapp_business_messaging
-  [ok  ] phone number is reachable              +91 80859 28343 (Samvaad), quality GREEN
+         token and phone number id are set
+  [ok  ] access token is valid
+         type SYSTEM_USER, scopes whatsapp_business_management,whatsapp_business_messaging
+  [ok  ] phone number is reachable
+         +91 8085x xxxxx, quality GREEN
   [ok  ] webhook points back here
-  [FAIL] template META_TEMPLATE_NAME            dwarpal_purchase_approval does not exist at all
+         configured https://<your-tunnel>.ngrok-free.dev/webhooks/whatsapp
+  [ok  ] the configured number belongs to this account
+         +91 8085x xxxxx
+  [ok  ] template META_TEMPLATE_NAME
+         dwarpal_purchase_approval (en) is APPROVED
+  [ok  ] template META_RECEIPT_TEMPLATE_NAME
+         dwarpal_purchase_receipt (en) is APPROVED
 ```
+
+Both templates are present on the right account under the right locale, which is what the check
+was written to confirm. The one remaining failure is an account-level warning, not a send path.
+
+### Proving the templates by using them
+
+`check-channels` proves a template exists and is APPROVED. It cannot prove a send through that
+template is accepted, because Meta reports that per message and only at send time: a template can
+be approved and still be refused for a parameter count that does not match the one it was approved
+with, a locale that does not match, or a button index it does not have. So there is a second
+command that settles it by sending:
+
+```bash
+cd backend && python -m app.cli probe-templates --allow-live-whatsapp
+```
+
+It sends one message through each configured template to `ESCALATION_HUMAN_WHATSAPP` and prints
+the message id Meta returns for each. The flag is required, and without it the command refuses and
+sends nothing, because this reaches a real phone. The parameters that carry meaning say what the
+message is, so a probe can never be mistaken for a real purchase.
+
+```
+  [ok  ] escalation template
+         dwarpal_purchase_approval (en)
+         wamid.HBgM...MkQ5RjFGNEUxMkQ1QTYxOUExAA==
+  [ok  ] receipt template
+         dwarpal_purchase_receipt (en)
+         wamid.HBgM...RDM4QjRBMzczNDNBNzk0QzNFAA==
+
+2 of 2 template sends accepted
+```
+
+A returned message id is Meta accepting the send against that template. Delivery to the handset is
+reported separately, as a `sent` then `delivered` status posted to the webhook, which is the row
+above it in the table. A failed send is reported rather than raised, so one template failing while
+the other succeeds is visible instead of hidden behind a traceback.
 
 ---
 

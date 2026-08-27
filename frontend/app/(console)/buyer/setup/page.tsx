@@ -425,9 +425,11 @@ export default async function SetupPage() {
               </li>
               <li>
                 <Code>META_TEMPLATE_NAME</Code> for approvals and{" "}
-                <Code>META_RECEIPT_TEMPLATE_NAME</Code> for receipts. Meta only allows free-form
-                messages inside the twenty-four hour window after the person last replied; outside
-                it, an approved template is the only thing that will deliver.
+                <Code>META_RECEIPT_TEMPLATE_NAME</Code> for receipts. The two names shipped in{" "}
+                <Code>.env.example</Code> are the Utility templates this project had approved. Meta
+                only allows free-form messages inside the twenty-four hour window after the person
+                last replied; outside it, an approved template is the only thing that will
+                deliver.
               </li>
               <li>
                 <Code>NOTIFY_PURCHASE_RECEIPTS</Code> turns receipts off without touching the
