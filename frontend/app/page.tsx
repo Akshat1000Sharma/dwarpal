@@ -93,21 +93,26 @@ function Hero() {
     <section className="relative overflow-hidden border-b border-line bg-surface">
       <div className="pointer-events-none absolute inset-0 grid-field" aria-hidden="true" />
       <div className="relative mx-auto w-full max-w-[1180px] px-5 pb-16 pt-14 sm:px-6 sm:pb-20 sm:pt-20">
-        <div className="grid items-center gap-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)]">
+        {/*
+          The masthead spans the container rather than sitting in the left column. At half width
+          the display size wraps "An agent just tried to" and orphans the "to" onto its own line;
+          the whole 1180px holds it comfortably.
+        */}
+        <span className="inline-flex items-center gap-2 rounded-full border border-line bg-sunken px-3 py-1 text-[11px] font-medium uppercase tracking-[0.08em] text-muted">
+          AP2 merchant endpoint for Razorpay
+        </span>
+
+        <h1 className="display mt-6 text-[clamp(2.35rem,6vw,4.15rem)]">
+          An agent just tried to
+          <br />
+          spend your money.
+          <br />
+          <span className="text-brand">Prove it was allowed to.</span>
+        </h1>
+
+        <div className="mt-10 grid items-center gap-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)]">
           <div>
-            <span className="inline-flex items-center gap-2 rounded-full border border-line bg-sunken px-3 py-1 text-[11px] font-medium uppercase tracking-[0.08em] text-muted">
-              AP2 merchant endpoint for Razorpay
-            </span>
-
-            <h1 className="display mt-6 text-[clamp(2.35rem,6vw,4.15rem)]">
-              An agent just tried to
-              <br />
-              spend your money.
-              <br />
-              <span className="text-brand">Prove it was allowed to.</span>
-            </h1>
-
-            <p className="mt-6 max-w-[52ch] text-[15px] leading-relaxed text-body sm:text-[16px]">
+            <p className="max-w-[52ch] text-[15px] leading-relaxed text-body sm:text-[16px]">
               When a bot buys and the human later disputes it, there is no 3-D Secure record, no
               signed receipt and no accepted evidence standard. The merchant carries that loss.
               Dwarpal is the gate that stops the unauthorised purchase, and the evidence that
