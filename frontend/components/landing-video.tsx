@@ -14,23 +14,29 @@ import { useRef, useState } from "react";
  *
  * The landscape and portrait cuts are two files, not one file letterboxed twice. Both are in the
  * markup because the choice between them has to stay in CSS; only the visible one is ever played.
+ *
+ * Each cut carries its own poster for the same reason. The poster is what every visitor sees,
+ * because the video never plays until asked, and a 16:9 still in the 9:16 box would sit in the
+ * middle of two empty bands.
  */
 export function LandingVideo({
   landscape,
   portrait,
-  poster,
+  landscapePoster,
+  portraitPoster,
 }: {
   landscape: string;
   portrait: string;
-  poster?: string;
+  landscapePoster?: string;
+  portraitPoster?: string;
 }) {
   return (
     <>
       <div className="sm:hidden">
-        <Player src={portrait} poster={poster} ratio="9 / 16" />
+        <Player src={portrait} poster={portraitPoster} ratio="9 / 16" />
       </div>
       <div className="hidden sm:block">
-        <Player src={landscape} poster={poster} ratio="16 / 9" />
+        <Player src={landscape} poster={landscapePoster} ratio="16 / 9" />
       </div>
     </>
   );

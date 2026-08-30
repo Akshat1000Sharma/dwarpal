@@ -140,6 +140,8 @@ function Hero() {
             <LandingVideo
               landscape="/walkthrough-landscape.mp4"
               portrait="/walkthrough-portrait.mp4"
+              landscapePoster="/walkthrough-landscape.jpg"
+              portraitPoster="/walkthrough-portrait.jpg"
             />
             <p className="mt-3 text-center text-[12px] text-faint">
               One agent, one cart, four credentials, one verdict, one evidence packet.
