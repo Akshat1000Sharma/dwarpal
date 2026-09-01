@@ -57,6 +57,12 @@ class RunBody(BaseModel):
     human_present: bool = False
 
 
+class AnswerBody(BaseModel):
+    """A present person's answer to the escalation their own run raised."""
+
+    decision: str
+
+
 class PayBody(BaseModel):
     """Exactly what Razorpay Checkout hands to the page's handler."""
 
@@ -162,6 +168,23 @@ def get_run(run_id: str, db: Annotated[Session, Depends(get_db)]) -> dict[str, A
         for n in receipts.for_correlation(db, run.correlation_id)
     ]
     return document
+
+
+@router.post("/runs/{run_id}/answer")
+def answer_run(
+    run_id: str, body: AnswerBody, db: Annotated[Session, Depends(get_db)]
+) -> dict[str, Any]:
+    """Answer a human-present escalation raised by this run.
+
+    The console cannot sign the confirmation itself: it has to come from the trusted surface, and
+    the browser must never hold that key. The runner signs with the surface this run was issued
+    under and puts the result through the same confirm endpoint an external agent would use, so
+    none of the checking is skipped by answering from here.
+    """
+    try:
+        return runner.answer(db, run_id, body.decision)
+    except runner.AnswerUnavailable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/runs/{run_id}/pay")

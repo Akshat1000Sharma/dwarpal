@@ -566,6 +566,17 @@ class BuyerRun(Base):
     amount_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     currency: Mapped[str] = mapped_column(String(3), default="INR")
     plan: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    # The mock trusted surface and agent keys for this run, kept only while a human-present
+    # escalation is open so the person at the keyboard can still sign an answer to it minutes
+    # later, and after a reload. These are throwaway harness keys minted per run by
+    # app/harness/factory.py, not the merchant signing key and not anybody's real credential;
+    # the conformance matrix already records the trusted surface as mocked. Written when such an
+    # escalation is raised and cleared the moment it settles, so a finished run holds none.
+    # none_as_null, so clearing it writes SQL NULL rather than the JSON literal null: an
+    # emptied run should be indistinguishable from one that never held keys.
+    surface_keys: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 

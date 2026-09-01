@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import { BaseUrlForm, BaseUrlProvider, CopyBlockBase, CopyFieldBase } from "@/components/base-url";
 import { BrandHeading, CLAUDE_ORANGE, ClaudeMark, WHATSAPP_GREEN, WhatsAppMark } from "@/components/brand";
 import { CopyBlock, CopyField } from "@/components/copy";
 import { BackendDown, Card, Code, Note, PageHeader, Pill } from "@/components/ui";
 import { backendReachable, backendRead } from "@/lib/backend";
+import { BASE_TOKEN } from "@/lib/base-url";
 import type { ConnectionsPayload, GatewayMode } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -22,11 +24,10 @@ export default async function SetupPage() {
     }),
   ]);
 
-  const base = connections.public_base_url;
   const card = gateway?.test_card;
 
   return (
-    <>
+    <BaseUrlProvider>
       <PageHeader
         title="Configure your AI agent"
         description="Everything an agent needs to transact here: where to look, what to present, and how the money moves. The console on the previous page is one client of this API; yours can be another."
@@ -38,14 +39,30 @@ export default async function SetupPage() {
         Razorpay&apos;s published test card and is accepted by nothing else.
       </Note>
 
+      <Note>
+        <span className="font-medium">The addresses below are a placeholder.</span> Every example on
+        this page is written against a tunnel that is not yours, because a merchant reached over
+        ngrok has a different address on every machine and a new one after each restart. Put your
+        own in step one and the whole page rewrites itself to match.
+      </Note>
+
       <SectionRule
         eyebrow="Part one"
         title="The HTTP path"
-        description="Six steps from arriving at the merchant to a settled payment. This is the surface every agent uses, whatever it is built on."
+        description="Seven steps from arriving at the merchant to a settled payment. This is the surface every agent uses, whatever it is built on."
       />
 
       <Card
-        title="1. Get a connection"
+        title="1. Point the examples at your merchant"
+        description="Set the address your merchant answers on, and every command on this page is rewritten to use it. Nothing is sent anywhere; this only changes what the page shows you."
+      >
+        <div className="px-4 py-5 sm:px-5">
+          <BaseUrlForm />
+        </div>
+      </Card>
+
+      <Card
+        title="2. Get a connection"
         description="A connection tells the merchant which agent is yours and where to send the WhatsApp receipt when it buys something."
       >
         <div className="space-y-4 px-4 py-5 sm:px-5">
@@ -67,12 +84,12 @@ export default async function SetupPage() {
       </Card>
 
       <Card
-        title="2. Find the merchant"
+        title="3. Find the merchant"
         description="One well-known document tells an arriving agent everything it needs to negotiate: the protocol versions spoken, the credential types accepted, where to browse and quote, and which issuing authorities are trusted."
       >
         <div className="space-y-4 px-4 py-5 sm:px-5">
-          <CopyField label="Discovery" value={`${base}/.well-known/ap2-merchant`} />
-          <CopyBlock label="Try it" value={`curl -s ${base}/.well-known/ap2-merchant | jq`} />
+          <CopyFieldBase label="Discovery" value={`${BASE_TOKEN}/.well-known/ap2-merchant`} />
+          <CopyBlockBase label="Try it" value={`curl -s ${BASE_TOKEN}/.well-known/ap2-merchant | jq`} />
           <p className="text-[12.5px] leading-relaxed text-muted">
             The <Code>audience</Code> in that document is the value your key-binding proof must
             carry. Do not guess it from the URL you dialled: the merchant may sit behind a proxy or
@@ -82,18 +99,18 @@ export default async function SetupPage() {
       </Card>
 
       <Card
-        title="3. Browse, then quote"
+        title="4. Browse, then quote"
         description="Browsing and quoting need no credentials at all. An agent assembles a cart first and identifies itself only when it wants to buy."
       >
         <div className="space-y-4 px-4 py-5 sm:px-5">
-          <CopyBlock
+          <CopyBlockBase
             label="Browse the catalog"
-            value={`curl -s "${base}/catalog/items?limit=10" \\
+            value={`curl -s "${BASE_TOKEN}/catalog/items?limit=10" \\
   -H "${connections.header}: dwc_your_token_here" | jq`}
           />
-          <CopyBlock
+          <CopyBlockBase
             label="Ask for a price"
-            value={`curl -s -X POST ${base}/checkout/quote \\
+            value={`curl -s -X POST ${BASE_TOKEN}/checkout/quote \\
   -H "Content-Type: application/json" \\
   -H "${connections.header}: dwc_your_token_here" \\
   -d '{"items":[{"sku":"DWP-TEA-001","quantity":2}]}' | jq`}
@@ -109,7 +126,7 @@ export default async function SetupPage() {
       </Card>
 
       <Card
-        title="4. Present the four mandates"
+        title="5. Present the four mandates"
         description="AP2 separates two questions and answers each at two moments. The open pair is the standing authority a human signed in advance; the closed pair is the agent's claim about this specific purchase."
       >
         <div className="space-y-4 px-4 py-5 sm:px-5">
@@ -140,9 +157,9 @@ export default async function SetupPage() {
             />
           </div>
 
-          <CopyBlock
+          <CopyBlockBase
             label="Complete the purchase"
-            value={`curl -s -X POST ${base}/checkout/complete \\
+            value={`curl -s -X POST ${BASE_TOKEN}/checkout/complete \\
   -H "Content-Type: application/json" \\
   -H "${connections.header}: dwc_your_token_here" \\
   -H "Idempotency-Key: your-own-unique-key" \\
@@ -172,13 +189,13 @@ export default async function SetupPage() {
       </Card>
 
       <Card
-        title="5. Read the answer without parsing prose"
+        title="6. Read the answer without parsing prose"
         description="Every response carries a reason code from a closed set and the action an agent should take next, so a refusal never needs a human to interpret it."
       >
         <div className="space-y-4 px-4 py-5 sm:px-5">
-          <CopyBlock
+          <CopyBlockBase
             label="Enumerate every refusal you might see"
-            value={`curl -s ${base}/merchant/reason-codes \\
+            value={`curl -s ${BASE_TOKEN}/merchant/reason-codes \\
   -H "${connections.header}: dwc_your_merchant_scoped_token" | jq`}
           />
           <p className="text-[12.5px] leading-relaxed text-muted">
@@ -206,7 +223,7 @@ export default async function SetupPage() {
       </Card>
 
       <Card
-        title="6. Set up automated payments"
+        title="7. Set up automated payments"
         description="The merchant creates the Razorpay order only after the kernel has approved. Nothing about paying can widen what was allowed."
       >
         <div className="space-y-4 px-4 py-5 sm:px-5">
@@ -444,7 +461,7 @@ export default async function SetupPage() {
           </div>
         </div>
       </Card>
-    </>
+    </BaseUrlProvider>
   );
 }
 
@@ -465,7 +482,9 @@ function SectionRule({
       <h2 className="mt-1.5 text-[22px] font-semibold tracking-[-0.02em] text-ink sm:text-[25px]">
         {title}
       </h2>
-      <p className="mt-2 max-w-[68ch] text-[13.5px] leading-relaxed text-muted">{description}</p>
+      <p className="mt-2 max-w-[104ch] text-balance text-[13.5px] leading-relaxed text-muted">
+        {description}
+      </p>
     </div>
   );
 }

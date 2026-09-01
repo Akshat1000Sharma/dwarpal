@@ -53,7 +53,9 @@ export function Card({
               <h2 className="text-[15px] font-semibold tracking-tight text-ink">{title}</h2>
             )}
             {description && (
-              <p className="mt-1 max-w-2xl text-[13px] leading-relaxed text-muted">{description}</p>
+              <p className="mt-1 max-w-[104ch] text-balance text-[13px] leading-relaxed text-muted">
+                {description}
+              </p>
             )}
           </div>
           {actions && <div className="shrink-0">{actions}</div>}
@@ -127,7 +129,7 @@ export function ReasonCode({ code }: { code: string }) {
 export function Pill({ children, tone = "neutral" }: { children: ReactNode; tone?: Tone }) {
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-medium ${FILL_TONE[tone]}`}
+      className={`inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium ${FILL_TONE[tone]}`}
     >
       {children}
     </span>
@@ -272,7 +274,9 @@ export function PageHeader({
           {title}
         </h1>
         {description && (
-          <p className="mt-1.5 max-w-3xl text-[13px] leading-relaxed text-muted">{description}</p>
+          <p className="mt-1.5 max-w-[104ch] text-balance text-[13px] leading-relaxed text-muted">
+            {description}
+          </p>
         )}
       </div>
       {actions && <div className="shrink-0">{actions}</div>}

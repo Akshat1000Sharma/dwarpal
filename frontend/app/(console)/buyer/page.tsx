@@ -181,12 +181,14 @@ export default async function BuyerPage() {
                       className="flex items-start justify-between gap-3 px-4 py-3 transition-colors hover:bg-sunken sm:px-5"
                     >
                       <span className="min-w-0">
-                        <span className="block truncate text-[13px] text-ink">{run.prompt}</span>
+                        <span className="block text-[13px] text-ink">{run.prompt}</span>
                         <span className="mt-1 block text-[11.5px] text-faint">
                           {relative(run.created_at)} - {run.amount.display}
                         </span>
                       </span>
-                      <RunStatus status={run.status} />
+                      <span className="shrink-0">
+                        <RunStatus status={run.status} />
+                      </span>
                     </Link>
                   </li>
                 ))}

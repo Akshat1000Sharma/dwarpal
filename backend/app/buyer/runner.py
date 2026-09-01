@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.buyer import planner as planning
@@ -81,6 +81,18 @@ class RunLog:
         self._started: float | None = None
 
     def start(self) -> None:
+        self._started = time.perf_counter()
+
+    def resume(self) -> None:
+        """Continue a run's log that an earlier pass already wrote to.
+
+        The sequence is unique per run, so a second RunLog for the same run would restart at one
+        and collide with what is already there.
+        """
+        highest = self.session.scalar(
+            select(func.max(BuyerRunEvent.seq)).where(BuyerRunEvent.run_id == self.run_id)
+        )
+        self._seq = int(highest or 0)
         self._started = time.perf_counter()
 
     def event(
@@ -378,7 +390,9 @@ def _drive(
 
     log.event(
         "verdict",
-        _describe_outcome(outcome.status, outcome.reason_code.value),
+        _describe_outcome(
+            outcome.status, outcome.reason_code.value, human_present=request.human_present
+        ),
         level="info" if outcome.status in ("completed", "awaiting_payment") else "warn",
         data={
             "status": outcome.status,
@@ -397,6 +411,24 @@ def _drive(
         "escalated": BuyerRunStatus.ESCALATED,
     }.get(outcome.status, BuyerRunStatus.REFUSED)
 
+    if status is BuyerRunStatus.ESCALATED and request.human_present:
+        # Nobody was messaged, so the answer has to come from this page. Keep what it takes to
+        # sign one until the question is settled; _answer clears it again.
+        run.surface_keys = _dump_keys(principals)
+        log.event(
+            "awaiting_your_answer",
+            (
+                "No message was sent because you are at the keyboard. Approve or deny it here and "
+                "the same signature checks run as for any other credential."
+            ),
+            data={
+                "escalation_id": (outcome.detail or {}).get("escalation_id"),
+                "deadline_at": (outcome.detail or {}).get("deadline_at"),
+                "constraint_text": ", ".join(request.natural_language),
+                "answered_at": "POST /checkout/confirm",
+            },
+        )
+
     if status is BuyerRunStatus.AWAITING_PAYMENT:
         log.event(
             "payment_required",
@@ -411,6 +443,205 @@ def _drive(
             },
         )
 
+    _finish(session, run, status, reason_code=outcome.reason_code.value, close=False)
+
+
+def _dump_keys(principals: factory.Principals) -> dict[str, Any]:
+    """Serialise a run's mock surface and agent keys so an answer can still be signed later."""
+    from app.ap2.jose import private_key_to_pem
+
+    return {
+        "issuer_id": principals.issuer_id,
+        "agent_id": principals.agent_id,
+        "issuer_kid": principals.issuer.kid,
+        "agent_kid": principals.agent.kid,
+        "issuer_pem": private_key_to_pem(principals.issuer.private_key).decode(),
+        "agent_pem": private_key_to_pem(principals.agent.private_key).decode(),
+    }
+
+
+def _load_keys(stored: dict[str, Any]) -> factory.Principals:
+    """Rebuild the principals, and put the surface back in the registry.
+
+    Principals.create registers the mock authority's key in this process only, so after a restart
+    the registry no longer knows it and a confirmation it signed would be refused as coming from
+    an untrusted surface. Re-registering here is what lets an answer survive a reload.
+    """
+    from app.ap2.jose import KeyPair, private_key_from_pem
+    from app.trust.registry import register_runtime_key
+
+    principals = factory.Principals(
+        issuer=KeyPair(
+            kid=stored["issuer_kid"],
+            private_key=private_key_from_pem(stored["issuer_pem"].encode()),
+        ),
+        agent=KeyPair(
+            kid=stored["agent_kid"],
+            private_key=private_key_from_pem(stored["agent_pem"].encode()),
+        ),
+        issuer_id=stored["issuer_id"],
+        agent_id=stored["agent_id"],
+    )
+    register_runtime_key(principals.issuer_id, principals.issuer.public_jwk())
+    return principals
+
+
+class AnswerUnavailable(RuntimeError):
+    """The run cannot be answered from here, with a reason worth showing the operator."""
+
+
+def answer(session: Session, run_id: str, decision: str) -> dict[str, Any]:
+    """Answer a human-present escalation from the console, then carry the run on.
+
+    The confirmation is signed here rather than in the browser because it has to come from the
+    trusted surface, and it is checked by the same endpoint an external agent would call, so the
+    signature, the expiry and the binding to this escalation and this Checkout all still hold.
+    Approving only settles the escalation; the credential chain is then presented again, which is
+    what actually completes the checkout.
+    """
+    from app.api.agent import ConfirmRequest, post_confirm
+    from app.db.models import CheckoutSession
+
+    if decision not in ("approve", "deny"):
+        raise AnswerUnavailable("the answer must be approve or deny")
+
+    run = session.get(BuyerRun, run_id)
+    if run is None:
+        raise AnswerUnavailable("no such run")
+    if run.status != BuyerRunStatus.ESCALATED.value:
+        raise AnswerUnavailable(f"this run is {run.status}, so there is nothing to answer")
+    if not run.surface_keys:
+        raise AnswerUnavailable(
+            "the keys for this run are gone, which happens when the backend restarted while the "
+            "question was open. Send the agent again."
+        )
+
+    checkout = session.get(CheckoutSession, run.checkout_id) if run.checkout_id else None
+    if checkout is None or not checkout.checkout_hash or not checkout.checkout_jwt:
+        raise AnswerUnavailable("the checkout behind this run is no longer available")
+
+    escalation_id = _escalation_id_for(session, run_id)
+    if not escalation_id:
+        raise AnswerUnavailable("no escalation was recorded for this run")
+
+    set_correlation_id(run.correlation_id)
+    log = RunLog(session, run_id)
+    log.resume()
+    principals = _load_keys(run.surface_keys)
+
+    confirmation = factory.sign_confirmation(
+        principals,
+        escalation_id=escalation_id,
+        checkout_hash=checkout.checkout_hash,
+        decision=decision,
+    )
+    result = post_confirm(
+        ConfirmRequest(escalation_id=escalation_id, confirmation=confirmation), session
+    )
+    log.event(
+        "your_answer",
+        (
+            "You approved it, signed by the trusted surface you are at."
+            if decision == "approve"
+            else "You denied it, signed by the trusted surface you are at."
+        ),
+        data={
+            "decision": decision,
+            "accepted": result.get("accepted"),
+            "escalation_status": result.get("status"),
+        },
+    )
+
+    if decision != "approve" or not result.get("accepted"):
+        # Nothing else will touch this run, so clearing here is the last word on it.
+        run.surface_keys = None
+        _finish(session, run, BuyerRunStatus.REFUSED, reason_code="ESCALATION_DENIED")
+        return {"status": run.status, "accepted": bool(result.get("accepted"))}
+
+    _settle_after_answer(session, run, log, principals, checkout)
+    return {"status": run.status, "accepted": True}
+
+
+def _escalation_id_for(session: Session, run_id: str) -> str | None:
+    """The escalation the verdict raised, as recorded in the run's own log."""
+    rows = session.scalars(
+        select(BuyerRunEvent).where(BuyerRunEvent.run_id == run_id).order_by(BuyerRunEvent.seq)
+    ).all()
+    for event in reversed(rows):
+        data = event.data or {}
+        found = data.get("escalation_id") or (data.get("detail") or {}).get("escalation_id")
+        if found:
+            return str(found)
+    return None
+
+
+def _settle_after_answer(
+    session: Session,
+    run: BuyerRun,
+    log: RunLog,
+    principals: factory.Principals,
+    checkout: Any,
+) -> None:
+    """Present the chain again against the same Checkout, which is what settles it."""
+    plan = run.plan or {}
+    lines = [
+        (line["sku"], line.get("title", ""), int(line["quantity"]))
+        for line in plan.get("lines", [])
+    ]
+    cap = int(plan.get("budget_cap_minor", 0))
+    spec = factory.spec_for_cart(
+        lines,
+        amount_cap_minor=cap,
+        natural_language=list(plan.get("natural_language", [])),
+        budget_minor=cap,
+    )
+    issued = factory.issue_open_mandates(principals, spec)
+    presentation = factory.present_issued(
+        issued,
+        checkout_jwt=checkout.checkout_jwt,
+        checkout_hash=checkout.checkout_hash,
+        amount_minor=checkout.total_minor,
+        audience=settings.PUBLIC_BASE_URL,
+        # A fresh nonce, because the first presentation has already been spent and replaying one
+        # is refused exactly as it should be.
+        nonce=f"console-answer-{run.correlation_id[-12:]}",
+        human_present=True,
+    )
+    outcome = complete(
+        session,
+        presentation.credentials,
+        correlation_id=run.correlation_id,
+        semantic_client=_semantic_client(),
+        audience=settings.PUBLIC_BASE_URL,
+        connection_id=run.connection_id,
+    )
+    session.flush()
+
+    run.reason_code = outcome.reason_code.value
+    run.evidence_packet_id = outcome.evidence_packet_id
+    run.payment_id = outcome.payment_id
+    run.razorpay_order_id = (outcome.detail or {}).get("razorpay_order_id")
+
+    log.event(
+        "verdict",
+        _describe_outcome(outcome.status, outcome.reason_code.value, human_present=True),
+        level="info" if outcome.status in ("completed", "awaiting_payment") else "warn",
+        data={
+            "status": outcome.status,
+            "reason_code": outcome.reason_code.value,
+            "evidence_packet_id": outcome.evidence_packet_id,
+            "detail": outcome.detail,
+        },
+    )
+    status = {
+        "completed": BuyerRunStatus.COMPLETED,
+        "awaiting_payment": BuyerRunStatus.AWAITING_PAYMENT,
+        "compensated": BuyerRunStatus.COMPENSATED,
+        "escalated": BuyerRunStatus.ESCALATED,
+    }.get(outcome.status, BuyerRunStatus.REFUSED)
+    # Cleared here rather than before completing: complete() commits, which expires the session,
+    # so an assignment made earlier is reloaded away before it is ever written back.
+    run.surface_keys = None
     _finish(session, run, status, reason_code=outcome.reason_code.value, close=False)
 
 
@@ -440,12 +671,20 @@ def _describe_plan(plan: BuyerPlan) -> str:
     return f"The agent chose {items}{suffix}"
 
 
-def _describe_outcome(status: str, reason_code: str) -> str:
+def _describe_outcome(status: str, reason_code: str, *, human_present: bool = False) -> str:
+    if status == "escalated":
+        # Presence changes who is asked and how. Saying "asked the human" either way reads as
+        # though a message went out, which is what makes the silence look like a failure.
+        return (
+            "The kernel could not decide alone. You attested you are at the keyboard, so it is "
+            "asking you here rather than over WhatsApp."
+            if human_present
+            else "The kernel could not decide alone and asked the human over WhatsApp."
+        )
     return {
         "completed": "Approved by the policy kernel and captured. Money moved.",
         "awaiting_payment": "Approved by the policy kernel. The order is waiting to be paid.",
         "compensated": "Captured, then the authority was withdrawn, so the money was returned.",
-        "escalated": "The kernel could not decide alone and asked the human.",
     }.get(status, f"Refused by the merchant: {reason_code}")
 
 

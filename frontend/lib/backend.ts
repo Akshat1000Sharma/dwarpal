@@ -64,13 +64,49 @@ export async function backendFetch<T>(path: string, options: RequestOptions = {}
   return (text ? JSON.parse(text) : {}) as T;
 }
 
+const UNREACHABLE_CODES = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EHOSTUNREACH",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+
+/**
+ * The errno behind a failed connection, or undefined for any other failure.
+ *
+ * Node reports this as a TypeError whose cause carries the code, and as an AggregateError whose
+ * `errors` hold one per address when it tried both the IPv6 and IPv4 form of the host. Nothing in
+ * either shape tells a developer more than the code itself does.
+ */
+function unreachableCode(error: unknown): string | undefined {
+  const codeOf = (value: unknown): string | undefined => {
+    const code = (value as { code?: unknown } | null | undefined)?.code;
+    return typeof code === "string" && UNREACHABLE_CODES.has(code) ? code : undefined;
+  };
+
+  const cause = (error as { cause?: unknown } | null | undefined)?.cause;
+  const nested = (cause as { errors?: unknown } | null | undefined)?.errors;
+  return codeOf(cause) ?? (Array.isArray(nested) ? nested.map(codeOf).find(Boolean) : undefined);
+}
+
 /** Read a surface, returning a fallback rather than blanking the page when the backend is down. */
 export async function backendRead<T>(path: string, fallback: T): Promise<T> {
   try {
     return await backendFetch<T>(path);
   } catch (error) {
-    // The page still renders its empty state rather than blanking, but an empty table caused by a
-    // 401 must not look identical to one caused by there being nothing to show.
+    // A backend that is not running is the ordinary case while working on the frontend alone, and
+    // it is already visible on the page: the dashboard renders BackendDown and the landing page
+    // says no scorecard has been generated. Repeating it in the terminal on every request only
+    // buries the failures that do need reading, so this one returns quietly.
+    if (unreachableCode(error)) {
+      return fallback;
+    }
+
+    // Everything else is reported. The page still renders its empty state rather than blanking,
+    // but an empty table caused by a 401 must not look identical to one caused by there being
+    // nothing to show.
     console.error(
       `[dwarpal] ${path} failed, rendering the fallback:`,
       error instanceof BackendError ? `${error.status} ${error.message}` : error,

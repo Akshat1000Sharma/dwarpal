@@ -102,12 +102,15 @@ function Hero() {
           AP2 merchant endpoint for Razorpay
         </span>
 
-        <h1 className="display mt-6 text-[clamp(2.35rem,6vw,4.15rem)]">
-          An agent just tried to
-          <br />
-          spend your money.
-          <br />
-          <span className="text-brand">Prove it was allowed to.</span>
+        {/*
+          The first sentence is sized to sit on one line from lg up, where the container is at its
+          1180px cap. Below that it wraps on its own; forcing a break would orphan a word again.
+          The answering line is set smaller so the two read as claim and challenge rather than as
+          one run-on shout.
+        */}
+        <h1 className="display mt-6 text-[clamp(2.35rem,5vw,3.8rem)]">
+          An agent just tried to spend your money.
+          <span className="mt-1 block text-[0.8em] text-brand">Prove it was allowed to.</span>
         </h1>
 
         <div className="mt-10 grid items-center gap-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)]">
@@ -657,14 +660,18 @@ function SectionHeading({
   lede?: string;
 }) {
   return (
-    <div className="max-w-[64ch]">
+    // The measure belongs to the lede, not to the block. Constraining the whole heading broke
+    // every title in half while the cards beneath it ran the full width.
+    <div>
       <div className="text-[11px] font-semibold uppercase tracking-[0.09em] text-brand">
         {eyebrow}
       </div>
       <h2 className="mt-3 text-[clamp(1.6rem,3.4vw,2.35rem)] font-semibold tracking-[-0.02em] leading-[1.12] text-ink">
         {title}
       </h2>
-      {lede && <p className="mt-3 text-[14px] leading-relaxed text-muted">{lede}</p>}
+      {lede && (
+        <p className="mt-3 max-w-[64ch] text-[14px] leading-relaxed text-muted">{lede}</p>
+      )}
     </div>
   );
 }

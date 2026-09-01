@@ -102,6 +102,14 @@ def raise_escalation(
     if not notify:
         # No message was sent, so nobody was asked over this channel and no inbound reply on it
         # can be this person's answer. sent_to stays empty and record_answer refuses accordingly.
+        #
+        # Logged because the silence is otherwise indistinguishable from a delivery that failed
+        # without saying so: every other route out of here logs, and an operator looking for the
+        # message they never received should find the reason rather than nothing.
+        logger.info(
+            "escalation raised without a message; a present human answers it in band",
+            extra={"context": {"escalation_id": escalation.id, "answered_at": "/checkout/confirm"}},
+        )
         return escalation
 
     sender = transport or default_transport()
